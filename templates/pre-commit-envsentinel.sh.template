@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+# ${marker}
+set -eu
+
+if ! command -v ${envsentinel_command} >/dev/null 2>&1; then
+  echo "${envsentinel_command} not found; skipping env validation." >&2
+  exit 0
+fi
+
+if [ ! -f envsentinel.json ]; then
+  exit 0
+fi
+
+if [ -f .env ]; then
+  ${envsentinel_command} check --schema envsentinel.json --env .env
+else
+  ${envsentinel_command} example --schema envsentinel.json --output .env.example --force >/dev/null
+  git add .env.example
+fi

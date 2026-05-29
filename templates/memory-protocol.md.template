@@ -1,0 +1,41 @@
+# Agent Memory Protocol
+
+${marker}
+
+This repository uses the Agent Field Kit memory protocol. Engramize is the
+preferred local scaffold for qualification, deduplication, drafting, approval,
+and verification of durable agent memories.
+
+## Rules
+
+- Search existing memory before preserving a new lesson.
+- Prefer focused chunks over full-memory reads when a chunk is enough.
+- Do not store secrets, credentials, private account data, or raw user tokens.
+- Draft memory entries first; commit them only after explicit approval.
+- Store durable technical lessons, project decisions, environment constraints,
+  and repeatable workflows.
+- Skip one-off observations, noisy logs, and facts already captured elsewhere.
+
+## Suggested Workflow
+
+1. Qualify the candidate lesson.
+2. Search for semantic duplicates.
+3. Draft a concise memory with title, tags, evidence, and verification notes.
+4. Ask for approval before committing.
+5. Verify the committed memory can be found again.
+
+## Engramize Source
+
+Configured source:
+
+```text
+${engramize_local_source}
+```
+
+Fallback repo:
+
+```text
+${engramize_repo}
+```
+
+Generated at `${generated_at}`.

@@ -32,6 +32,12 @@ DEFAULT_CONFIG = {
     "prose_hygiene_compat_command": "emdash-scrub",
     "prose_hygiene_local_source": str(Path.home() / "AGENT_HOME" / "prose-hygiene"),
     "prose_hygiene_repo": "git@github.com:tweakyourpc/prose-hygiene.git",
+    "envsentinel_command": "envsentinel",
+    "envsentinel_local_source": str(Path.home() / "AGENT_HOME" / "envsentinel"),
+    "envsentinel_repo": "git@github.com:tweakyourpc/envsentinel.git",
+    "engramize_local_source": str(Path.home() / "RAG" / "workspace" / "engramize"),
+    "engramize_repo": "git@github.com:tweakyourpc/engramize.git",
+    "memory_protocol_dir": ".agent-field-kit",
     "github_command": "gh",
     "clasp_command": "clasp",
     "clasp_auth_check_command": "show-authorized-user",
@@ -211,6 +217,28 @@ def install_prose_hygiene(config: dict, dry_run: bool = False) -> None:
     run_checked([python, "-m", "pip", "install", "--user", "-e", str(source)], timeout=240, dry_run=dry_run)
 
 
+def install_envsentinel(config: dict, dry_run: bool = False) -> None:
+    source = source_or_clone(
+        config["envsentinel_local_source"],
+        config["envsentinel_repo"],
+        config["tool_source_dir"],
+        dry_run=dry_run,
+    )
+    python = sys.executable or "python3"
+    run_checked([python, "-m", "pip", "install", "--user", "-e", str(source)], timeout=240, dry_run=dry_run)
+
+
+def install_engramize(config: dict, dry_run: bool = False) -> None:
+    source = source_or_clone(
+        config["engramize_local_source"],
+        config["engramize_repo"],
+        config["tool_source_dir"],
+        dry_run=dry_run,
+    )
+    python = sys.executable or "python3"
+    run_checked([python, "-m", "pip", "install", "--user", "-e", str(source)], timeout=240, dry_run=dry_run)
+
+
 def install_clasp(config: dict, dry_run: bool = False) -> None:
     npm = config["node_package_manager"]
     run_checked([npm, "install", "-g", "@google/clasp"], timeout=240, dry_run=dry_run)
@@ -229,12 +257,16 @@ def install_gh(config: dict, dry_run: bool = False) -> None:
 def install_tools(args: argparse.Namespace) -> int:
     p = paths()
     config = load_config(p)
-    selected = args.tools or ["portbroker", "prose-hygiene", "clasp", "gh"]
+    selected = args.tools or ["portbroker", "prose-hygiene", "envsentinel", "engramize", "clasp", "gh"]
     for tool in selected:
         if tool == "portbroker":
             install_portbroker(config, dry_run=args.dry_run)
         elif tool == "prose-hygiene":
             install_prose_hygiene(config, dry_run=args.dry_run)
+        elif tool == "envsentinel":
+            install_envsentinel(config, dry_run=args.dry_run)
+        elif tool == "engramize":
+            install_engramize(config, dry_run=args.dry_run)
         elif tool == "clasp":
             install_clasp(config, dry_run=args.dry_run)
         elif tool == "gh":
@@ -255,11 +287,15 @@ def install_hooks(args: argparse.Namespace) -> int:
     hook = hook_dir / "pre-commit"
     drop_dir = hook_dir / "pre-commit.d"
     prose_hook = drop_dir / "10-prose-hygiene"
+    env_hook = drop_dir / "20-envsentinel"
     dispatcher = render_template(p, "pre-commit-dispatcher.sh.template", config)
     prose = render_template(p, "pre-commit-emdash-scrub.sh.template", config)
+    envsentinel = render_template(p, "pre-commit-envsentinel.sh.template", config)
     if args.dry_run:
         print(f"[dry-run] write {hook}")
         print(f"[dry-run] write {prose_hook}")
+        if args.include_envsentinel:
+            print(f"[dry-run] write {env_hook}")
         return 0
     hook_dir.mkdir(parents=True, exist_ok=True)
     drop_dir.mkdir(parents=True, exist_ok=True)
@@ -277,6 +313,10 @@ def install_hooks(args: argparse.Namespace) -> int:
     prose_hook.chmod(0o755)
     print(f"Installed pre-commit dispatcher: {hook}")
     print(f"Installed prose hygiene hook: {prose_hook}")
+    if args.include_envsentinel:
+        env_hook.write_text(envsentinel, encoding="utf-8")
+        env_hook.chmod(0o755)
+        print(f"Installed EnvSentinel hook: {env_hook}")
     return 0
 
 
@@ -338,6 +378,84 @@ def setup_clasp(args: argparse.Namespace) -> int:
     return 0
 
 
+def init_env_contract(args: argparse.Namespace) -> int:
+    p = paths()
+    config = load_config(p)
+    repo = Path(args.repo).expanduser().resolve()
+    schema = repo / args.schema
+    example = repo / args.example
+    env_file = repo / args.env
+    command = config["envsentinel_command"]
+    if args.from_env and env_file.exists() and which(command):
+        run_checked([command, "init", "--from-env", str(env_file), "--schema", str(schema)], cwd=repo, timeout=120, dry_run=args.dry_run)
+        run_checked([command, "example", "--schema", str(schema), "--output", str(example), "--force"], cwd=repo, timeout=120, dry_run=args.dry_run)
+        return 0
+    starter = {
+        "version": 1,
+        "allow_unknown": False,
+        "variables": {
+            "APP_ENV": {
+                "required": True,
+                "type": "string",
+                "choices": ["dev", "stage", "prod"],
+                "default": "dev",
+                "description": "Application environment.",
+            },
+            "PORT": {
+                "required": False,
+                "type": "int",
+                "min": 1,
+                "max": 65535,
+                "description": "Runtime port. Prefer portbroker-managed PORT values.",
+            },
+        },
+    }
+    if args.dry_run:
+        print(f"[dry-run] write {schema}")
+        print(f"[dry-run] write {example}")
+        return 0
+    if schema.exists() and not args.force:
+        raise SystemExit(f"Refusing to overwrite existing {schema}; pass --force")
+    schema.write_text(json.dumps(starter, indent=2) + "\n", encoding="utf-8")
+    example.write_text("APP_ENV=dev\nPORT=\n", encoding="utf-8")
+    print(f"Wrote {schema}")
+    print(f"Wrote {example}")
+    return 0
+
+
+def check_env(args: argparse.Namespace) -> int:
+    p = paths()
+    config = load_config(p)
+    repo = Path(args.repo).expanduser().resolve()
+    command = config["envsentinel_command"]
+    schema = repo / args.schema
+    if not schema.exists() and not args.dry_run:
+        raise SystemExit(f"Missing EnvSentinel schema: {schema}")
+    cmd = [command, "check", "--schema", str(schema)]
+    for env_file in args.env:
+        cmd.extend(["--env", str(repo / env_file)])
+    if args.env_glob:
+        for pattern in args.env_glob:
+            cmd.extend(["--env-glob", pattern])
+    run_checked(cmd, cwd=repo, timeout=120, dry_run=args.dry_run)
+    return 0
+
+
+def setup_memory(args: argparse.Namespace) -> int:
+    p = paths()
+    config = load_config(p)
+    repo = Path(args.repo).expanduser().resolve()
+    if args.install:
+        install_engramize(config, dry_run=args.dry_run)
+    content = render_template(p, "memory-protocol.md.template", config)
+    target = repo / config["memory_protocol_dir"] / "memory-protocol.md"
+    if args.dry_run:
+        print(f"[dry-run] write {target}")
+        return 0
+    write_generated(target, content)
+    return 0
+
+
 def wizard(args: argparse.Namespace) -> int:
     p = paths()
     config = load_config(p)
@@ -356,6 +474,12 @@ def wizard(args: argparse.Namespace) -> int:
     config["prose_hygiene_compat_command"] = prompt("Legacy em dash scrub command", str(config["prose_hygiene_compat_command"]))
     config["prose_hygiene_local_source"] = prompt("Local prose-hygiene source", str(config["prose_hygiene_local_source"]))
     config["prose_hygiene_repo"] = prompt("Prose-hygiene Git repo", str(config["prose_hygiene_repo"]))
+    config["envsentinel_command"] = prompt("EnvSentinel command", str(config["envsentinel_command"]))
+    config["envsentinel_local_source"] = prompt("Local EnvSentinel source", str(config["envsentinel_local_source"]))
+    config["envsentinel_repo"] = prompt("EnvSentinel Git repo", str(config["envsentinel_repo"]))
+    config["engramize_local_source"] = prompt("Local Engramize source", str(config["engramize_local_source"]))
+    config["engramize_repo"] = prompt("Engramize Git repo", str(config["engramize_repo"]))
+    config["memory_protocol_dir"] = prompt("Memory protocol directory", str(config["memory_protocol_dir"]))
     config["github_command"] = prompt("GitHub CLI command", str(config["github_command"]))
     config["clasp_command"] = prompt("Google clasp command", str(config["clasp_command"]))
     config["clasp_auth_check_command"] = prompt("clasp auth check subcommand", str(config["clasp_auth_check_command"]))
@@ -442,6 +566,12 @@ def doctor(args: argparse.Namespace) -> int:
         check_tool("GitHub CLI", config["github_command"], [[config["github_command"], "auth", "status"]]),
         check_tool("Google clasp", config["clasp_command"], [[config["clasp_command"], config["clasp_auth_check_command"]]]),
     ]
+    if getattr(args, "include_optional", False):
+        results.append(check_tool("EnvSentinel", config["envsentinel_command"], [[config["envsentinel_command"], "--help"]]))
+        engramize_source = Path(config["engramize_local_source"]).expanduser()
+        engramize_ok = engramize_source.exists() or (Path(config["tool_source_dir"]).expanduser() / repo_name(config["engramize_repo"])).exists()
+        print(f"[ok] Engramize source: {redact(str(engramize_source))}" if engramize_ok else f"[missing] Engramize source: {redact(str(engramize_source))}")
+        results.append(engramize_ok)
     config_ok = p.config_file.exists()
     print(f"[ok] config: {redact(str(p.config_file))}" if config_ok else f"[warn] config not created yet: {redact(str(p.config_file))}")
     if args.strict and not config_ok:
@@ -461,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     doctor_parser = sub.add_parser("doctor", help="Check local tool and auth readiness")
     doctor_parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     doctor_parser.add_argument("--strict", action="store_true", help="Fail when config has not been written")
+    doctor_parser.add_argument("--include-optional", action="store_true", help="Also check EnvSentinel and Engramize")
     doctor_parser.set_defaults(func=doctor)
 
     render_parser = sub.add_parser("render", help="Render an agent instruction template")
@@ -468,12 +599,13 @@ def main(argv: list[str] | None = None) -> int:
     render_parser.set_defaults(func=render)
 
     tools_parser = sub.add_parser("install-tools", help="Install or update local helper tools")
-    tools_parser.add_argument("tools", nargs="*", choices=["portbroker", "prose-hygiene", "clasp", "gh"])
+    tools_parser.add_argument("tools", nargs="*", choices=["portbroker", "prose-hygiene", "envsentinel", "engramize", "clasp", "gh"])
     tools_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files")
     tools_parser.set_defaults(func=install_tools)
 
     hooks_parser = sub.add_parser("install-hooks", help="Install prose hygiene git hooks into a repository")
     hooks_parser.add_argument("--repo", default=".", help="Repository path")
+    hooks_parser.add_argument("--include-envsentinel", action="store_true", help="Also install an EnvSentinel pre-commit hook")
     hooks_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files")
     hooks_parser.set_defaults(func=install_hooks)
 
@@ -496,6 +628,30 @@ def main(argv: list[str] | None = None) -> int:
     clasp_parser.add_argument("--push", action="store_true", help="Run clasp push -f after setup")
     clasp_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files or remote state")
     clasp_parser.set_defaults(func=setup_clasp)
+
+    env_init_parser = sub.add_parser("init-env-contract", help="Create an EnvSentinel schema and .env.example")
+    env_init_parser.add_argument("--repo", default=".", help="Repository path")
+    env_init_parser.add_argument("--schema", default="envsentinel.json", help="Schema path relative to repo")
+    env_init_parser.add_argument("--example", default=".env.example", help="Example env path relative to repo")
+    env_init_parser.add_argument("--env", default=".env", help="Existing env file to bootstrap from")
+    env_init_parser.add_argument("--from-env", action="store_true", help="Use envsentinel init when an env file exists")
+    env_init_parser.add_argument("--force", action="store_true", help="Overwrite starter files")
+    env_init_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files")
+    env_init_parser.set_defaults(func=init_env_contract)
+
+    env_check_parser = sub.add_parser("check-env", help="Validate env files with EnvSentinel")
+    env_check_parser.add_argument("--repo", default=".", help="Repository path")
+    env_check_parser.add_argument("--schema", default="envsentinel.json", help="Schema path relative to repo")
+    env_check_parser.add_argument("--env", action="append", default=[".env"], help="Env file path relative to repo")
+    env_check_parser.add_argument("--env-glob", action="append", help="Env glob passed through to EnvSentinel")
+    env_check_parser.add_argument("--dry-run", action="store_true", help="Print actions without validating")
+    env_check_parser.set_defaults(func=check_env)
+
+    memory_parser = sub.add_parser("setup-memory", help="Install Engramize support and write a memory protocol")
+    memory_parser.add_argument("--repo", default=".", help="Repository path")
+    memory_parser.add_argument("--install", action="store_true", help="Install Engramize from configured source")
+    memory_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files")
+    memory_parser.set_defaults(func=setup_memory)
 
     args = parser.parse_args(argv)
     return args.func(args)

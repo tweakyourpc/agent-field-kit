@@ -10,8 +10,12 @@ Supported capabilities:
 - install or update `portbroker` from a local source or GitHub fallback
 - install or update `prose-hygiene` from a local source or GitHub fallback
 - install Google Apps Script `clasp` with npm
+- install EnvSentinel for `.env` contract validation
+- install Engramize as an optional memory workflow scaffold
 - check GitHub CLI availability and auth
-- install prose-hygiene pre-commit hooks
+- install prose-hygiene and optional EnvSentinel pre-commit hooks
+- initialize and check EnvSentinel contracts
+- write an Engramize-oriented memory protocol into a repo
 - render Codex, Claude, and OpenCode instruction files
 - create or push GitHub repos through `gh`
 - create or connect `.clasp.json` projects and optionally push with `clasp`
@@ -52,9 +56,13 @@ bin/agent-field-kit wizard
 bin/agent-field-kit wizard --install-tools
 bin/agent-field-kit doctor
 bin/agent-field-kit doctor --strict
+bin/agent-field-kit doctor --include-optional
 bin/agent-field-kit install-tools
-bin/agent-field-kit install-tools portbroker prose-hygiene
-bin/agent-field-kit install-hooks --repo /path/to/repo
+bin/agent-field-kit install-tools portbroker prose-hygiene envsentinel engramize
+bin/agent-field-kit install-hooks --repo /path/to/repo --include-envsentinel
+bin/agent-field-kit init-env-contract --repo /path/to/repo
+bin/agent-field-kit check-env --repo /path/to/repo
+bin/agent-field-kit setup-memory --repo /path/to/repo --install
 bin/agent-field-kit publish-github --repo . --name my-repo --private --push
 bin/agent-field-kit setup-clasp --repo . --script-id SCRIPT_ID
 bin/agent-field-kit setup-clasp --repo . --create --title "My Script" --push
@@ -72,9 +80,21 @@ Defaults are intentionally configurable in the wizard:
 
 - `portbroker`: `git@github.com:tweakyourpc/portbroker.git`
 - `prose-hygiene`: `git@github.com:tweakyourpc/prose-hygiene.git`
+- `envsentinel`: `git@github.com:tweakyourpc/envsentinel.git`
+- `engramize`: `git@github.com:tweakyourpc/engramize.git`
 
 If a matching local source path exists, Agent Field Kit uses that instead of
 cloning. On this machine those defaults point at local development checkouts.
+
+## Capability Packs
+
+EnvSentinel adds a configuration contract layer. Agent Field Kit can create a
+starter `envsentinel.json`, generate `.env.example`, check `.env` files, and add
+an EnvSentinel hook to the local pre-commit dispatcher.
+
+Engramize adds a memory workflow layer. Agent Field Kit can install the source
+package and write `.agent-field-kit/memory-protocol.md` into a repository so
+agents have an explicit approval-gated memory workflow.
 
 ## Auth Boundary
 
