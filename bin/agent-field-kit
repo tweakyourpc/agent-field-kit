@@ -23,11 +23,19 @@ DEFAULT_CONFIG = {
     "profile_name": "local-user",
     "default_host": "0.0.0.0",
     "service_name_style": "project-slug",
+    "install_bin_dir": str(Path.home() / "bin"),
+    "tool_source_dir": str(Path.home() / ".local" / "src" / APP_NAME),
     "portbroker_command": "portbroker",
-    "prose_hygiene_command": "emdash-scrub",
+    "portbroker_local_source": str(Path.home() / "Projects" / "portbroker"),
+    "portbroker_repo": "git@github.com:tweakyourpc/portbroker.git",
+    "prose_hygiene_command": "prose-hygiene",
+    "prose_hygiene_compat_command": "emdash-scrub",
+    "prose_hygiene_local_source": str(Path.home() / "AGENT_HOME" / "prose-hygiene"),
+    "prose_hygiene_repo": "git@github.com:tweakyourpc/prose-hygiene.git",
     "github_command": "gh",
     "clasp_command": "clasp",
     "clasp_auth_check_command": "show-authorized-user",
+    "node_package_manager": "npm",
     "install_codex": True,
     "install_claude": True,
     "install_opencode": False,
@@ -82,19 +90,33 @@ def which(command: str) -> str | None:
     return shutil.which(command)
 
 
-def run_status(command: list[str]) -> tuple[int, str]:
+def run_status(command: list[str], cwd: Path | None = None, timeout: int = 30) -> tuple[int, str]:
     try:
         proc = subprocess.run(
             command,
+            cwd=str(cwd) if cwd else None,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=12,
+            timeout=timeout,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 127, str(exc)
     return proc.returncode, proc.stdout.strip()
+
+
+def run_checked(command: list[str], cwd: Path | None = None, timeout: int = 120, dry_run: bool = False) -> None:
+    shown = " ".join(command)
+    if dry_run:
+        print(f"[dry-run] {shown}")
+        return
+    print(f"[run] {shown}")
+    code, output = run_status(command, cwd=cwd, timeout=timeout)
+    if output:
+        print(indent(redact(output)))
+    if code != 0:
+        raise SystemExit(code)
 
 
 def template_vars(config: dict) -> dict:
@@ -136,6 +158,186 @@ def install_agent_files(p: Paths, config: dict) -> None:
         write_generated(Path.home() / ".config" / "opencode" / "AGENTS.md", render_template(p, "AGENTS.md.template", config))
 
 
+def source_or_clone(local_source: str, repo: str, target_parent: str, dry_run: bool = False) -> Path:
+    local = Path(local_source).expanduser()
+    if local.exists():
+        return local
+    target_parent_path = Path(target_parent).expanduser()
+    target = target_parent_path / repo_name(repo)
+    if target.exists():
+        return target
+    if dry_run:
+        print(f"[dry-run] git clone {repo} {target}")
+        return target
+    target_parent_path.mkdir(parents=True, exist_ok=True)
+    run_checked(["git", "clone", repo, str(target)], timeout=240)
+    return target
+
+
+def repo_name(repo: str) -> str:
+    base = repo.rstrip("/").split("/")[-1]
+    return base[:-4] if base.endswith(".git") else base
+
+
+def install_portbroker(config: dict, dry_run: bool = False) -> None:
+    source = source_or_clone(
+        config["portbroker_local_source"],
+        config["portbroker_repo"],
+        config["tool_source_dir"],
+        dry_run=dry_run,
+    )
+    src = source / "portbroker"
+    if not src.exists():
+        raise SystemExit(f"portbroker source not found: {src}")
+    dest_dir = Path(config["install_bin_dir"]).expanduser()
+    dest = dest_dir / "portbroker"
+    if dry_run:
+        print(f"[dry-run] install {src} -> {dest}")
+        return
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    dest.chmod(0o755)
+    print(f"Installed {dest}")
+
+
+def install_prose_hygiene(config: dict, dry_run: bool = False) -> None:
+    source = source_or_clone(
+        config["prose_hygiene_local_source"],
+        config["prose_hygiene_repo"],
+        config["tool_source_dir"],
+        dry_run=dry_run,
+    )
+    python = sys.executable or "python3"
+    run_checked([python, "-m", "pip", "install", "--user", "-e", str(source)], timeout=240, dry_run=dry_run)
+
+
+def install_clasp(config: dict, dry_run: bool = False) -> None:
+    npm = config["node_package_manager"]
+    run_checked([npm, "install", "-g", "@google/clasp"], timeout=240, dry_run=dry_run)
+
+
+def install_gh(config: dict, dry_run: bool = False) -> None:
+    if which(config["github_command"]):
+        print(f"[ok] GitHub CLI already installed: {redact(which(config['github_command']) or '')}")
+        return
+    print("GitHub CLI is not installed. Install it with your OS package manager, then run `gh auth login`.")
+    print("Debian/Ubuntu packages are documented at https://github.com/cli/cli/blob/trunk/docs/install_linux.md")
+    if dry_run:
+        print("[dry-run] no OS package command was run")
+
+
+def install_tools(args: argparse.Namespace) -> int:
+    p = paths()
+    config = load_config(p)
+    selected = args.tools or ["portbroker", "prose-hygiene", "clasp", "gh"]
+    for tool in selected:
+        if tool == "portbroker":
+            install_portbroker(config, dry_run=args.dry_run)
+        elif tool == "prose-hygiene":
+            install_prose_hygiene(config, dry_run=args.dry_run)
+        elif tool == "clasp":
+            install_clasp(config, dry_run=args.dry_run)
+        elif tool == "gh":
+            install_gh(config, dry_run=args.dry_run)
+        else:
+            raise SystemExit(f"Unknown tool: {tool}")
+    return 0
+
+
+def install_hooks(args: argparse.Namespace) -> int:
+    p = paths()
+    config = load_config(p)
+    repo = Path(args.repo).expanduser().resolve()
+    git_dir = repo / ".git"
+    if not git_dir.exists():
+        raise SystemExit(f"Not a git repository: {repo}")
+    hook_dir = git_dir / "hooks"
+    hook = hook_dir / "pre-commit"
+    drop_dir = hook_dir / "pre-commit.d"
+    prose_hook = drop_dir / "10-prose-hygiene"
+    dispatcher = render_template(p, "pre-commit-dispatcher.sh.template", config)
+    prose = render_template(p, "pre-commit-emdash-scrub.sh.template", config)
+    if args.dry_run:
+        print(f"[dry-run] write {hook}")
+        print(f"[dry-run] write {prose_hook}")
+        return 0
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    drop_dir.mkdir(parents=True, exist_ok=True)
+    if hook.exists() and MARKER not in hook.read_text(encoding="utf-8", errors="replace"):
+        backup = hook.with_suffix(".bak")
+        counter = 1
+        while backup.exists():
+            backup = hook.with_suffix(f".bak{counter}")
+            counter += 1
+        hook.rename(backup)
+        print(f"Backed up existing hook to {backup}")
+    hook.write_text(dispatcher, encoding="utf-8")
+    prose_hook.write_text(prose, encoding="utf-8")
+    hook.chmod(0o755)
+    prose_hook.chmod(0o755)
+    print(f"Installed pre-commit dispatcher: {hook}")
+    print(f"Installed prose hygiene hook: {prose_hook}")
+    return 0
+
+
+def publish_github(args: argparse.Namespace) -> int:
+    p = paths()
+    config = load_config(p)
+    repo = Path(args.repo).expanduser().resolve()
+    gh = config["github_command"]
+    run_checked([gh, "auth", "status"], cwd=repo, dry_run=args.dry_run)
+    if not (repo / ".git").exists():
+        run_checked(["git", "init"], cwd=repo, dry_run=args.dry_run)
+    code, _ = run_status(["git", "remote", "get-url", "origin"], cwd=repo)
+    if code != 0:
+        visibility = "--private" if args.private else "--public"
+        create = [gh, "repo", "create", args.name, "--source", str(repo), visibility]
+        if args.push:
+            create.append("--push")
+        run_checked(create, cwd=repo, timeout=240, dry_run=args.dry_run)
+    elif args.push:
+        branch = args.branch or current_branch(repo)
+        run_checked(["git", "push", "-u", "origin", branch], cwd=repo, timeout=240, dry_run=args.dry_run)
+    else:
+        print("[ok] origin remote already exists; use --push to push current branch")
+    return 0
+
+
+def current_branch(repo: Path) -> str:
+    code, output = run_status(["git", "branch", "--show-current"], cwd=repo)
+    if code == 0 and output.strip():
+        return output.strip()
+    return "main"
+
+
+def setup_clasp(args: argparse.Namespace) -> int:
+    p = paths()
+    config = load_config(p)
+    repo = Path(args.repo).expanduser().resolve()
+    clasp = config["clasp_command"]
+    run_checked([clasp, config["clasp_auth_check_command"]], cwd=repo, dry_run=args.dry_run)
+    project = repo / ".clasp.json"
+    if project.exists():
+        print(f"[ok] existing clasp project: {project}")
+    elif args.script_id:
+        content = json.dumps({"scriptId": args.script_id, "rootDir": args.root_dir}, indent=2) + "\n"
+        if args.dry_run:
+            print(f"[dry-run] write {project}")
+        else:
+            project.write_text(content, encoding="utf-8")
+            print(f"Wrote {project}")
+    elif args.create:
+        command = [clasp, "create", "--title", args.title, "--rootDir", args.root_dir]
+        if args.type:
+            command.extend(["--type", args.type])
+        run_checked(command, cwd=repo, timeout=240, dry_run=args.dry_run)
+    else:
+        raise SystemExit("No .clasp.json found. Pass --script-id ID or --create.")
+    if args.push:
+        run_checked([clasp, "push", "-f"], cwd=repo, timeout=240, dry_run=args.dry_run)
+    return 0
+
+
 def wizard(args: argparse.Namespace) -> int:
     p = paths()
     config = load_config(p)
@@ -145,11 +347,19 @@ def wizard(args: argparse.Namespace) -> int:
     config["profile_name"] = prompt("Profile name", str(config["profile_name"]))
     config["default_host"] = prompt("Default service bind host", str(config["default_host"]))
     config["service_name_style"] = prompt("Service naming style", str(config["service_name_style"]))
+    config["install_bin_dir"] = prompt("User binary install directory", str(config["install_bin_dir"]))
+    config["tool_source_dir"] = prompt("Downloaded tool source directory", str(config["tool_source_dir"]))
     config["portbroker_command"] = prompt("Portbroker command", str(config["portbroker_command"]))
+    config["portbroker_local_source"] = prompt("Local portbroker source", str(config["portbroker_local_source"]))
+    config["portbroker_repo"] = prompt("Portbroker Git repo", str(config["portbroker_repo"]))
     config["prose_hygiene_command"] = prompt("Prose hygiene command", str(config["prose_hygiene_command"]))
+    config["prose_hygiene_compat_command"] = prompt("Legacy em dash scrub command", str(config["prose_hygiene_compat_command"]))
+    config["prose_hygiene_local_source"] = prompt("Local prose-hygiene source", str(config["prose_hygiene_local_source"]))
+    config["prose_hygiene_repo"] = prompt("Prose-hygiene Git repo", str(config["prose_hygiene_repo"]))
     config["github_command"] = prompt("GitHub CLI command", str(config["github_command"]))
     config["clasp_command"] = prompt("Google clasp command", str(config["clasp_command"]))
     config["clasp_auth_check_command"] = prompt("clasp auth check subcommand", str(config["clasp_auth_check_command"]))
+    config["node_package_manager"] = prompt("Node package manager", str(config["node_package_manager"]))
     config["install_codex"] = prompt_bool("Install Codex instructions", bool(config["install_codex"]))
     config["install_claude"] = prompt_bool("Install Claude instructions", bool(config["install_claude"]))
     config["install_opencode"] = prompt_bool("Install OpenCode instructions", bool(config["install_opencode"]))
@@ -160,7 +370,10 @@ def wizard(args: argparse.Namespace) -> int:
     if not args.no_write:
         install_agent_files(p, config)
 
-    return doctor(argparse.Namespace(json=False))
+    if args.install_tools:
+        install_tools(argparse.Namespace(tools=None, dry_run=False))
+
+    return doctor(argparse.Namespace(json=False, strict=False))
 
 
 def render(args: argparse.Namespace) -> int:
@@ -210,13 +423,29 @@ def indent(text: str) -> str:
 def doctor(args: argparse.Namespace) -> int:
     p = paths()
     config = load_config(p)
+    prose_commands = [config["prose_hygiene_command"]]
+    compat = config.get("prose_hygiene_compat_command")
+    if compat and compat not in prose_commands:
+        prose_commands.append(compat)
+    prose_ok = any(which(command) for command in prose_commands)
+    if prose_ok:
+        for command in prose_commands:
+            if which(command):
+                prose_ok = check_tool("prose hygiene", command, [[command, "--help"]])
+                break
+    else:
+        print(f"[missing] prose hygiene: tried {', '.join(prose_commands)}")
+
     results = [
         check_tool("portbroker", config["portbroker_command"], [[config["portbroker_command"], "--help"]]),
-        check_tool("prose hygiene", config["prose_hygiene_command"], [[config["prose_hygiene_command"], "--help"]]),
+        prose_ok,
         check_tool("GitHub CLI", config["github_command"], [[config["github_command"], "auth", "status"]]),
         check_tool("Google clasp", config["clasp_command"], [[config["clasp_command"], config["clasp_auth_check_command"]]]),
     ]
-    print(f"[ok] config: {redact(str(p.config_file))}" if p.config_file.exists() else f"[warn] config not created yet: {redact(str(p.config_file))}")
+    config_ok = p.config_file.exists()
+    print(f"[ok] config: {redact(str(p.config_file))}" if config_ok else f"[warn] config not created yet: {redact(str(p.config_file))}")
+    if args.strict and not config_ok:
+        results.append(False)
     return 0 if all(results) else 1
 
 
@@ -226,15 +455,47 @@ def main(argv: list[str] | None = None) -> int:
 
     wizard_parser = sub.add_parser("wizard", help="Prompt for local settings and install templates")
     wizard_parser.add_argument("--no-write", action="store_true", help="Save config but do not write agent files")
+    wizard_parser.add_argument("--install-tools", action="store_true", help="Install configured tools after writing config")
     wizard_parser.set_defaults(func=wizard)
 
     doctor_parser = sub.add_parser("doctor", help="Check local tool and auth readiness")
     doctor_parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    doctor_parser.add_argument("--strict", action="store_true", help="Fail when config has not been written")
     doctor_parser.set_defaults(func=doctor)
 
     render_parser = sub.add_parser("render", help="Render an agent instruction template")
     render_parser.add_argument("--agent", choices=["codex", "claude", "opencode"], required=True)
     render_parser.set_defaults(func=render)
+
+    tools_parser = sub.add_parser("install-tools", help="Install or update local helper tools")
+    tools_parser.add_argument("tools", nargs="*", choices=["portbroker", "prose-hygiene", "clasp", "gh"])
+    tools_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files")
+    tools_parser.set_defaults(func=install_tools)
+
+    hooks_parser = sub.add_parser("install-hooks", help="Install prose hygiene git hooks into a repository")
+    hooks_parser.add_argument("--repo", default=".", help="Repository path")
+    hooks_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files")
+    hooks_parser.set_defaults(func=install_hooks)
+
+    publish_parser = sub.add_parser("publish-github", help="Create or push a GitHub repository with gh")
+    publish_parser.add_argument("--repo", default=".", help="Repository path")
+    publish_parser.add_argument("--name", required=True, help="GitHub repository name")
+    publish_parser.add_argument("--private", action="store_true", help="Create a private repository")
+    publish_parser.add_argument("--push", action="store_true", help="Push after creating or when origin exists")
+    publish_parser.add_argument("--branch", help="Branch to push when origin already exists")
+    publish_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing remote state")
+    publish_parser.set_defaults(func=publish_github)
+
+    clasp_parser = sub.add_parser("setup-clasp", help="Create or connect an Apps Script project")
+    clasp_parser.add_argument("--repo", default=".", help="Project directory")
+    clasp_parser.add_argument("--script-id", help="Existing Apps Script script ID")
+    clasp_parser.add_argument("--root-dir", default=".", help="clasp rootDir value")
+    clasp_parser.add_argument("--create", action="store_true", help="Create a new Apps Script project with clasp")
+    clasp_parser.add_argument("--title", default="Apps Script Project", help="Title when creating a project")
+    clasp_parser.add_argument("--type", choices=["standalone", "docs", "sheets", "slides", "forms", "webapp", "api"])
+    clasp_parser.add_argument("--push", action="store_true", help="Run clasp push -f after setup")
+    clasp_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files or remote state")
+    clasp_parser.set_defaults(func=setup_clasp)
 
     args = parser.parse_args(argv)
     return args.func(args)
@@ -242,4 +503,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

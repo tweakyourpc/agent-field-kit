@@ -1,8 +1,14 @@
 #!/usr/bin/env sh
+# ${marker}
 set -eu
 
-if ! command -v ${prose_hygiene_command} >/dev/null 2>&1; then
-  echo "${prose_hygiene_command} not found; skipping prose hygiene." >&2
+prose_cmd=""
+if command -v ${prose_hygiene_command} >/dev/null 2>&1; then
+  prose_cmd="${prose_hygiene_command}"
+elif command -v ${prose_hygiene_compat_command} >/dev/null 2>&1; then
+  prose_cmd="${prose_hygiene_compat_command}"
+else
+  echo "No prose hygiene command found; skipping." >&2
   exit 0
 fi
 
@@ -13,8 +19,7 @@ fi
 
 for file in $files; do
   if [ -f "$file" ]; then
-    ${prose_hygiene_command} "$file" "$file" --json >/dev/null || exit 1
+    "$prose_cmd" "$file" "$file" --json >/dev/null || exit 1
     git add "$file"
   fi
 done
-

@@ -1,17 +1,20 @@
 # Agent Field Kit
 
 Agent Field Kit is a portable bootstrap bundle for local AI coding environments.
-It installs the habits and helper checks that make an agent usable on a busy
-machine without baking in the original user's personal paths, names, tokens, or
-service choices.
+It installs the habits, helper tools, checks, and publishing workflows that make
+an agent usable on a busy machine without baking in the original user's personal
+paths, names, tokens, or service choices.
 
-The first supported capabilities are:
+Supported capabilities:
 
-- portbroker-aware server startup rules
-- prose hygiene command discovery
-- GitHub CLI publishing readiness checks
-- Google Apps Script `clasp` readiness checks
-- Codex, Claude, and OpenCode instruction templates
+- install or update `portbroker` from a local source or GitHub fallback
+- install or update `prose-hygiene` from a local source or GitHub fallback
+- install Google Apps Script `clasp` with npm
+- check GitHub CLI availability and auth
+- install prose-hygiene pre-commit hooks
+- render Codex, Claude, and OpenCode instruction files
+- create or push GitHub repos through `gh`
+- create or connect `.clasp.json` projects and optionally push with `clasp`
 
 ## Why This Exists
 
@@ -26,6 +29,10 @@ combination of:
 Agent Field Kit keeps those layers separate. The repo contains templates and a
 wizard. Each user supplies their own settings and authenticates their own tools.
 
+No secrets are stored in this repository. Doctor output redacts email addresses,
+GitHub account names, common token shapes, Google OAuth client IDs, and home
+paths.
+
 ## Quick Start
 
 ```sh
@@ -36,43 +43,67 @@ That launches the wizard and writes:
 
 - `~/.config/agent-field-kit/config.json`
 - optional generated agent instruction files
-- optional pre-commit hook snippets
-
-No secrets are stored in this repository.
-
-The default `clasp` auth check is `clasp show-authorized-user`, because modern
-`clasp` versions do not support `clasp login --status`.
+- optional tool installs when run with `--install-tools`
 
 ## Commands
 
 ```sh
 bin/agent-field-kit wizard
+bin/agent-field-kit wizard --install-tools
 bin/agent-field-kit doctor
+bin/agent-field-kit doctor --strict
+bin/agent-field-kit install-tools
+bin/agent-field-kit install-tools portbroker prose-hygiene
+bin/agent-field-kit install-hooks --repo /path/to/repo
+bin/agent-field-kit publish-github --repo . --name my-repo --private --push
+bin/agent-field-kit setup-clasp --repo . --script-id SCRIPT_ID
+bin/agent-field-kit setup-clasp --repo . --create --title "My Script" --push
 bin/agent-field-kit render --agent codex
 bin/agent-field-kit render --agent claude
 bin/agent-field-kit render --agent opencode
 ```
 
+Every mutating command that can affect outside state supports `--dry-run` except
+the interactive wizard.
+
+## Tool Sources
+
+Defaults are intentionally configurable in the wizard:
+
+- `portbroker`: `git@github.com:tweakyourpc/portbroker.git`
+- `prose-hygiene`: `git@github.com:tweakyourpc/prose-hygiene.git`
+
+If a matching local source path exists, Agent Field Kit uses that instead of
+cloning. On this machine those defaults point at local development checkouts.
+
+## Auth Boundary
+
+Agent Field Kit does not copy credentials. Each machine/user must run their own
+authentication:
+
+```sh
+gh auth login
+clasp login
+```
+
+The default `clasp` auth check is `clasp show-authorized-user`, because modern
+`clasp` versions do not support `clasp login --status`.
+
 ## Design
 
 Agent Field Kit is intentionally boring:
 
-- Python standard library only
-- no network dependency during wizard or rendering
+- Python standard library only for the kit itself
+- no required network dependency during template rendering or doctor checks
 - explicit user-owned auth for GitHub and Google
 - templates with simple placeholders
 - generated files include a marker header
 
-## Suggested Publish Flow
+## Publish This Kit
 
 ```sh
-gh auth status
-git init
-git add .
-git commit -m "Initial Agent Field Kit"
-gh repo create agent-field-kit --source . --public --push
+bin/agent-field-kit publish-github --repo . --name agent-field-kit --private --push
 ```
 
 Use a private repository first if you want to review generated docs or examples
-before publishing.
-
+before publishing publicly.

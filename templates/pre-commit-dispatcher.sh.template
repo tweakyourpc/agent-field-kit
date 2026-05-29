@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# ${marker}
+set -eu
+
+hook_dir="$(dirname "$0")/pre-commit.d"
+if [ ! -d "$hook_dir" ]; then
+  exit 0
+fi
+
+for hook in "$hook_dir"/*; do
+  if [ -x "$hook" ]; then
+    "$hook"
+  fi
+done
