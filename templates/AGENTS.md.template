@@ -1,0 +1,62 @@
+# Agent Field Kit
+
+This environment is managed by Agent Field Kit for `${profile_name}`.
+
+## Port Rule
+
+Never guess ports.
+
+Before starting any HTTP or TCP service, obtain a named port:
+
+```sh
+PORT=$(${portbroker_command} get --name <service> 2>/dev/null || ${portbroker_command} alloc --name <service> --host ${default_host} --persistent)
+```
+
+Bind services to `${default_host}` unless the user explicitly requests a
+different host.
+
+Any new HTTP service should expose:
+
+```text
+GET /whoami
+```
+
+The response should include:
+
+```json
+{"service":"<service>","version":"<version>","pid":123,"startedAt":"<iso8601>","host":"${default_host}","port":1234}
+```
+
+If a port is needed in docs or commands, document the `PORT=$(...)` pattern
+instead of hard-coding common ports such as 3000, 5000, 8000, or 8080.
+
+When unsure, inspect current reservations and listeners:
+
+```sh
+${portbroker_command} list
+ss -ltnp
+```
+
+## Prose Hygiene
+
+Use `${prose_hygiene_command}` when asked to scrub prose, remove em dashes, or
+prepare docs before commit.
+
+## Publishing
+
+Use `${github_command}` for GitHub publishing only after verifying auth:
+
+```sh
+${github_command} auth status
+```
+
+Use `${clasp_command}` for Google Apps Script publishing only after verifying
+auth and project configuration:
+
+```sh
+${clasp_command} ${clasp_auth_check_command}
+test -f .clasp.json
+```
+
+Generated at `${generated_at}`.
+

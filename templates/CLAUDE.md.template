@@ -1,0 +1,46 @@
+# Agent Field Kit
+
+This Claude environment is managed by Agent Field Kit for `${profile_name}`.
+
+## Server Ports
+
+Use `${portbroker_command}` before launching any local server. Do not choose a
+port by convention.
+
+```sh
+PORT=$(${portbroker_command} get --name <service> 2>/dev/null || ${portbroker_command} alloc --name <service> --host ${default_host} --persistent)
+```
+
+Bind to `${default_host}` unless the user asks for localhost-only behavior.
+
+Every new HTTP service should implement:
+
+```text
+GET /whoami
+```
+
+The endpoint should return service name, version, pid, start time, host, and
+port.
+
+## Writing Checks
+
+Use `${prose_hygiene_command}` when the user asks to scrub prose or remove em
+dashes.
+
+## Publishing Checks
+
+Before GitHub publishing:
+
+```sh
+${github_command} auth status
+```
+
+Before Apps Script publishing:
+
+```sh
+${clasp_command} ${clasp_auth_check_command}
+test -f .clasp.json
+```
+
+Generated at `${generated_at}`.
+
