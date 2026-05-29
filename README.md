@@ -1,5 +1,7 @@
 # Agent Field Kit
 
+![Agent Field Kit hero: portable operations kit for AI coding agents](assets/agent-field-kit-hero.png)
+
 Agent Field Kit is a portable bootstrap bundle for local AI coding environments.
 It installs the habits, helper tools, checks, and publishing workflows that make
 an agent usable on a busy machine without baking in the original user's personal
