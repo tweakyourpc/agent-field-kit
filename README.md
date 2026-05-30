@@ -132,10 +132,10 @@ bin/agent-field-kit doctor --json --include-optional
 
 Defaults are intentionally configurable in the wizard:
 
-- `portbroker`: `git@github.com:tweakyourpc/portbroker.git`
-- `prose-hygiene`: `git@github.com:tweakyourpc/prose-hygiene.git`
-- `envsentinel`: `git@github.com:tweakyourpc/envsentinel.git`
-- `engramize`: `git@github.com:tweakyourpc/engramize.git`
+- `portbroker`: `https://github.com/tweakyourpc/portbroker.git`
+- `prose-hygiene`: `https://github.com/tweakyourpc/prose-hygiene.git`
+- `envsentinel`: `https://github.com/tweakyourpc/envsentinel.git`
+- `engramize`: `https://github.com/tweakyourpc/engramize.git`
 
 If a matching local source path exists, Agent Field Kit uses that instead of
 cloning. The default fallback repositories are public, but they are still
