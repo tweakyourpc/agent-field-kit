@@ -52,14 +52,18 @@ That launches the wizard and writes:
 - optional tool installs when run with `--install-tools`
 
 Set `AGENT_FIELD_KIT_CONFIG=/path/to/config.json` to use a separate config file
-for another machine, project, or agent persona.
+for another machine, project, or agent persona. Set `AGENT_HOME=/path/to/agent-home`
+to change the default local source base for Agent Home projects such as
+`prose-hygiene` and `envsentinel`.
 
 ## Commands
 
 ```sh
+bin/agent-field-kit --version
 bin/agent-field-kit wizard
 bin/agent-field-kit wizard --install-tools
 bin/agent-field-kit doctor
+bin/agent-field-kit doctor --json
 bin/agent-field-kit doctor --strict
 bin/agent-field-kit doctor --include-optional
 bin/agent-field-kit install-tools
@@ -79,7 +83,19 @@ bin/agent-field-kit render --agent opencode
 Every mutating command that can affect outside state supports `--dry-run` except
 the interactive wizard. Installer commands preflight required tools such as
 `git`, `pip`, and `npm` before mutating local state, and interrupted clones are
-cleaned up when Agent Field Kit created the target directory.
+cleaned up when Agent Field Kit created the target directory. GitHub CLI remains
+a guided install rather than a hard preflight dependency, so missing `gh` does
+not block installing the other tools.
+
+## Diagnostics
+
+`doctor` has human-readable and JSON modes. JSON output is intended for CI or
+other automation that wants to inspect readiness without scraping terminal text.
+
+```sh
+bin/agent-field-kit doctor --json
+bin/agent-field-kit doctor --json --include-optional
+```
 
 ## Tool Sources
 
