@@ -232,6 +232,22 @@ def install_portbroker(config: dict, dry_run: bool = False) -> None:
     print(f"Installed {dest}")
 
 
+def in_virtualenv() -> bool:
+    return sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+
+
+def install_python_cli_tool(source: Path, dry_run: bool = False) -> None:
+    pipx = which("pipx")
+    if pipx:
+        run_checked([pipx, "install", "--editable", "--force", str(source)], timeout=240, dry_run=dry_run)
+        return
+    python = sys.executable or "python3"
+    command = [python, "-m", "pip", "install", "-e", str(source)]
+    if not in_virtualenv():
+        command.insert(4, "--user")
+    run_checked(command, timeout=240, dry_run=dry_run)
+
+
 def install_prose_hygiene(config: dict, dry_run: bool = False) -> None:
     source = source_or_clone(
         config["prose_hygiene_local_source"],
@@ -239,8 +255,7 @@ def install_prose_hygiene(config: dict, dry_run: bool = False) -> None:
         config["tool_source_dir"],
         dry_run=dry_run,
     )
-    python = sys.executable or "python3"
-    run_checked([python, "-m", "pip", "install", "--user", "-e", str(source)], timeout=240, dry_run=dry_run)
+    install_python_cli_tool(source, dry_run=dry_run)
 
 
 def install_envsentinel(config: dict, dry_run: bool = False) -> None:
@@ -250,8 +265,7 @@ def install_envsentinel(config: dict, dry_run: bool = False) -> None:
         config["tool_source_dir"],
         dry_run=dry_run,
     )
-    python = sys.executable or "python3"
-    run_checked([python, "-m", "pip", "install", "--user", "-e", str(source)], timeout=240, dry_run=dry_run)
+    install_python_cli_tool(source, dry_run=dry_run)
 
 
 def install_engramize(config: dict, dry_run: bool = False) -> None:
@@ -261,8 +275,7 @@ def install_engramize(config: dict, dry_run: bool = False) -> None:
         config["tool_source_dir"],
         dry_run=dry_run,
     )
-    python = sys.executable or "python3"
-    run_checked([python, "-m", "pip", "install", "--user", "-e", str(source)], timeout=240, dry_run=dry_run)
+    install_python_cli_tool(source, dry_run=dry_run)
 
 
 def install_clasp(config: dict, dry_run: bool = False) -> None:
@@ -295,7 +308,7 @@ def preflight_install_dependencies(selected: list[str], config: dict, dry_run: b
 
     missing = [command for command in dict.fromkeys(required_commands) if not which(command)]
     python = sys.executable or "python3"
-    if pip_tools.intersection(selected):
+    if pip_tools.intersection(selected) and not which("pipx"):
         code, output = run_status([python, "-m", "pip", "--version"])
         if code != 0:
             missing.append(f"{python} -m pip")
@@ -586,7 +599,7 @@ def redact(text: str) -> str:
     home = str(Path.home())
     if home:
         text = text.replace(home, "~")
-    text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<email>", text)
+    text = re.sub(r"(?<![A-Za-z0-9._%+-])(?!(?:git|hg)@)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<email>", text)
     text = re.sub(r"account [^\s(]+", "account <github-account>", text)
     text = re.sub(r"gh[opsu]_[A-Za-z0-9_]+", "<github-token>", text)
     text = re.sub(r"[0-9]+-[A-Za-z0-9_.-]+\.apps\.googleusercontent\.com", "<google-oauth-client-id>", text)

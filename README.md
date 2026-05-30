@@ -82,10 +82,12 @@ bin/agent-field-kit render --agent opencode
 
 Every mutating command that can affect outside state supports `--dry-run` except
 the interactive wizard. Installer commands preflight required tools such as
-`git`, `pip`, and `npm` before mutating local state, and interrupted clones are
-cleaned up when Agent Field Kit created the target directory. GitHub CLI remains
-a guided install rather than a hard preflight dependency, so missing `gh` does
-not block installing the other tools.
+`git`, `pipx` or `pip`, and `npm` before mutating local state, and interrupted
+clones are cleaned up when Agent Field Kit created the target directory. Python
+CLI tools prefer `pipx install --editable --force`; when `pipx` is unavailable,
+the fallback uses venv-aware `pip install -e` behavior. GitHub CLI remains a
+guided install rather than a hard preflight dependency, so missing `gh` does not
+block installing the other tools.
 
 ## Diagnostics
 
