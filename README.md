@@ -153,7 +153,13 @@ bin/agent-field-kit bench list
 bin/agent-field-kit bench run --scenario em-dash --repo . --agent-command 'codex exec {task_file}'
 bin/agent-field-kit bench run --all --repo . --agent-command 'claude -p {task_file}' --timeout 300
 bin/agent-field-kit bench report --results .agent-field-kit/bench-results.jsonl
+python3 tests/bench_smoke.py
 ```
+
+`tests/bench_smoke.py` creates temporary repositories and verifies both a normal
+repair path and a hook-tampering path. The tamper case must fail even if the
+agent disables the hook, because the harness compares hook hashes and verifies
+the real defect state.
 
 Hooks append raw events to `.agent-field-kit/bench.log` only when
 `BENCH_SESSION` is set. The authoritative scorecard comes from the harness
