@@ -85,6 +85,31 @@ def prompt_bool(label: str, default: bool) -> bool:
     return answer in {"y", "yes", "true", "1"}
 
 
+def config_env_name(key: str) -> str:
+    return f"AGENT_FIELD_KIT_{key.upper()}"
+
+
+def parse_bool_env(name: str, value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise SystemExit(f"Invalid boolean for {name}: {value}")
+
+
+def apply_env_overrides(config: dict) -> list[str]:
+    applied: list[str] = []
+    for key, default in DEFAULT_CONFIG.items():
+        env_name = config_env_name(key)
+        if env_name not in os.environ:
+            continue
+        value = os.environ[env_name]
+        config[key] = parse_bool_env(env_name, value) if isinstance(default, bool) else value
+        applied.append(env_name)
+    return applied
+
+
 def load_config(p: Paths) -> dict:
     if not p.config_file.exists():
         return dict(DEFAULT_CONFIG)
@@ -237,6 +262,10 @@ def in_virtualenv() -> bool:
 
 
 def install_python_cli_tool(source: Path, dry_run: bool = False) -> None:
+    uv = which("uv")
+    if uv:
+        run_checked([uv, "tool", "install", "--editable", "--force", str(source)], timeout=240, dry_run=dry_run)
+        return
     pipx = which("pipx")
     if pipx:
         run_checked([pipx, "install", "--editable", "--force", str(source)], timeout=240, dry_run=dry_run)
@@ -308,7 +337,7 @@ def preflight_install_dependencies(selected: list[str], config: dict, dry_run: b
 
     missing = [command for command in dict.fromkeys(required_commands) if not which(command)]
     python = sys.executable or "python3"
-    if pip_tools.intersection(selected) and not which("pipx"):
+    if pip_tools.intersection(selected) and not which("uv") and not which("pipx"):
         code, output = run_status([python, "-m", "pip", "--version"])
         if code != 0:
             missing.append(f"{python} -m pip")
@@ -526,6 +555,23 @@ def wizard(args: argparse.Namespace) -> int:
     p = paths()
     config = load_config(p)
 
+    if args.non_interactive:
+        missing_env = [name for name in args.require_env if not os.environ.get(name)]
+        if missing_env:
+            raise SystemExit("Missing required environment variables for non-interactive setup: " + ", ".join(missing_env))
+        applied = apply_env_overrides(config)
+        save_config(p, config)
+        print(f"Saved {p.config_file}")
+        if applied:
+            print("Applied environment overrides: " + ", ".join(applied))
+        else:
+            print("No AGENT_FIELD_KIT_* config overrides were set; using existing config and defaults.")
+        if not args.no_write:
+            install_agent_files(p, config)
+        if args.install_tools:
+            install_tools(argparse.Namespace(tools=None, dry_run=False))
+        return doctor(argparse.Namespace(json=False, strict=False, include_optional=False))
+
     print("Agent Field Kit wizard")
     print("Values are local to this machine and can be changed later.")
     config["profile_name"] = prompt("Profile name", str(config["profile_name"]))
@@ -709,6 +755,8 @@ def main(argv: list[str] | None = None) -> int:
     wizard_parser = sub.add_parser("wizard", help="Prompt for local settings and install templates")
     wizard_parser.add_argument("--no-write", action="store_true", help="Save config but do not write agent files")
     wizard_parser.add_argument("--install-tools", action="store_true", help="Install configured tools after writing config")
+    wizard_parser.add_argument("--non-interactive", "--ci", action="store_true", help="Use defaults, existing config, and AGENT_FIELD_KIT_* environment overrides without prompts")
+    wizard_parser.add_argument("--require-env", action="append", default=[], help="In non-interactive mode, fail unless this environment variable is set; may be repeated")
     wizard_parser.set_defaults(func=wizard)
 
     doctor_parser = sub.add_parser("doctor", help="Check local tool and auth readiness")

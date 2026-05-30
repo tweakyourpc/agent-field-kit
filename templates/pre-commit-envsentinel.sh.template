@@ -12,8 +12,14 @@ if [ ! -f envsentinel.json ]; then
 fi
 
 if [ -f .env ]; then
-  ${envsentinel_command} check --schema envsentinel.json --env .env
+  if ! ${envsentinel_command} check --schema envsentinel.json --env .env; then
+    echo "[AGENT_DIRECTIVE: Your commit was rejected by EnvSentinel because .env does not satisfy envsentinel.json. Fix the missing, invalid, or extra environment variables, then retry the commit.]" >&2
+    exit 1
+  fi
 else
-  ${envsentinel_command} example --schema envsentinel.json --output .env.example --force >/dev/null
+  if ! ${envsentinel_command} example --schema envsentinel.json --output .env.example --force >/dev/null; then
+    echo "[AGENT_DIRECTIVE: EnvSentinel could not generate .env.example from envsentinel.json. Inspect the schema, fix it, and retry the commit.]" >&2
+    exit 1
+  fi
   git add .env.example
 fi

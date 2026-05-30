@@ -56,12 +56,40 @@ for another machine, project, or agent persona. Set `AGENT_HOME=/path/to/agent-h
 to change the default local source base for Agent Home projects such as
 `prose-hygiene` and `envsentinel`.
 
+### Headless Setup
+
+Use `wizard --non-interactive` or its `--ci` alias for containers, LXC nodes, and
+other provisioning scripts. In this mode the kit never prompts. It loads the
+existing config when present, falls back to built-in defaults, and applies any
+`AGENT_FIELD_KIT_*` overrides whose suffix matches a config key. Boolean values
+accept `1/0`, `true/false`, `yes/no`, and `on/off`.
+
+```sh
+export AGENT_FIELD_KIT_CONFIG=/opt/agent-field-kit/config.json
+export AGENT_FIELD_KIT_PROFILE_NAME=build-node-01
+export AGENT_FIELD_KIT_DEFAULT_HOST=0.0.0.0
+export AGENT_FIELD_KIT_INSTALL_CLAUDE=true
+export AGENT_FIELD_KIT_INSTALL_OPENCODE=false
+bin/agent-field-kit wizard --ci --install-tools --require-env GH_TOKEN
+```
+
+Use `--require-env NAME` for values your provisioning flow considers mandatory;
+the wizard exits before writing files if any requested variable is empty or
+missing.
+
+Authentication stays outside the config file. For GitHub automation, use the
+standard `GH_TOKEN` or `GITHUB_TOKEN` environment variable consumed by `gh`; do
+not pass tokens on the command line. Google Apps Script still requires the local
+`clasp` auth state for whichever user or service account owns the deployment.
+
 ## Commands
 
 ```sh
 bin/agent-field-kit --version
 bin/agent-field-kit wizard
 bin/agent-field-kit wizard --install-tools
+bin/agent-field-kit wizard --non-interactive
+bin/agent-field-kit wizard --ci --install-tools
 bin/agent-field-kit doctor
 bin/agent-field-kit doctor --json
 bin/agent-field-kit doctor --strict
@@ -82,12 +110,13 @@ bin/agent-field-kit render --agent opencode
 
 Every mutating command that can affect outside state supports `--dry-run` except
 the interactive wizard. Installer commands preflight required tools such as
-`git`, `pipx` or `pip`, and `npm` before mutating local state, and interrupted
-clones are cleaned up when Agent Field Kit created the target directory. Python
-CLI tools prefer `pipx install --editable --force`; when `pipx` is unavailable,
-the fallback uses venv-aware `pip install -e` behavior. GitHub CLI remains a
-guided install rather than a hard preflight dependency, so missing `gh` does not
-block installing the other tools.
+`git`, `uv`, `pipx` or `pip`, and `npm` before mutating local state, and
+interrupted clones are cleaned up when Agent Field Kit created the target
+directory. Python CLI tools prefer `uv tool install --editable --force`, then
+`pipx install --editable --force`; when neither is available, the fallback uses
+venv-aware `pip install -e` behavior. GitHub CLI remains a guided install rather
+than a hard preflight dependency, so missing `gh` does not block installing the
+other tools.
 
 ## Diagnostics
 
@@ -116,6 +145,11 @@ cloning. On this machine those defaults point at local development checkouts.
 EnvSentinel adds a configuration contract layer. Agent Field Kit can create a
 starter `envsentinel.json`, generate `.env.example`, check `.env` files, and add
 an EnvSentinel hook to the local pre-commit dispatcher.
+
+The generated hooks emit explicit `[AGENT_DIRECTIVE: ...]` messages on failures
+so coding agents get a direct repair instruction instead of generic shell output.
+That makes common retries deterministic: fix prose markers, fix `.env` contract
+violations, restage the corrected file, and retry the commit.
 
 Engramize adds a memory workflow layer. Agent Field Kit can install the source
 package and write `.agent-field-kit/memory-protocol.md` into a repository so
