@@ -138,7 +138,9 @@ Defaults are intentionally configurable in the wizard:
 - `engramize`: `git@github.com:tweakyourpc/engramize.git`
 
 If a matching local source path exists, Agent Field Kit uses that instead of
-cloning. On this machine those defaults point at local development checkouts.
+cloning. The default fallback repositories are public, but they are still
+examples of one opinionated toolchain. If you fork this kit or use different
+internal tools, run the wizard and replace these repository URLs with your own.
 
 ## Capability Packs
 
@@ -165,8 +167,12 @@ gh auth login
 clasp login
 ```
 
-The default `clasp` auth check is `clasp show-authorized-user`, because modern
-`clasp` versions do not support `clasp login --status`.
+The default `clasp` auth check is `clasp show-authorized-user`. In clasp 3.x,
+this replaced the older clasp 2.x `clasp login --status` auth-check spelling.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Design
 
