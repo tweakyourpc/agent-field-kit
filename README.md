@@ -47,9 +47,12 @@ paths.
 
 That launches the wizard and writes:
 
-- `~/.config/agent-field-kit/config.json`
+- `~/.config/agent-field-kit/config.json` by default
 - optional generated agent instruction files
 - optional tool installs when run with `--install-tools`
+
+Set `AGENT_FIELD_KIT_CONFIG=/path/to/config.json` to use a separate config file
+for another machine, project, or agent persona.
 
 ## Commands
 
@@ -74,7 +77,9 @@ bin/agent-field-kit render --agent opencode
 ```
 
 Every mutating command that can affect outside state supports `--dry-run` except
-the interactive wizard.
+the interactive wizard. Installer commands preflight required tools such as
+`git`, `pip`, and `npm` before mutating local state, and interrupted clones are
+cleaned up when Agent Field Kit created the target directory.
 
 ## Tool Sources
 
