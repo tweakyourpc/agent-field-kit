@@ -21,6 +21,7 @@ Supported capabilities:
 - render Codex, Claude, and OpenCode instruction files
 - create or push GitHub repos through `gh`
 - create or connect `.clasp.json` projects and optionally push with `clasp`
+- run closed-loop benchmark scenarios that measure observable agent recovery
 
 ## Why This Exists
 
@@ -106,6 +107,10 @@ bin/agent-field-kit setup-clasp --repo . --create --title "My Script" --push
 bin/agent-field-kit render --agent codex
 bin/agent-field-kit render --agent claude
 bin/agent-field-kit render --agent opencode
+bin/agent-field-kit bench list
+bin/agent-field-kit bench run --scenario em-dash --repo . --agent-command 'codex exec {task_file}'
+bin/agent-field-kit bench run --all --repo . --agent-command 'claude -p {task_file}'
+bin/agent-field-kit bench report --results .agent-field-kit/bench-results.jsonl
 ```
 
 Every mutating command that can affect outside state supports `--dry-run` except
@@ -127,6 +132,36 @@ other automation that wants to inspect readiness without scraping terminal text.
 bin/agent-field-kit doctor --json
 bin/agent-field-kit doctor --json --include-optional
 ```
+
+## Benchmarks
+
+`bench` measures what Agent Field Kit can observe from outside an agent process:
+scenario pass/fail, hook rejection count, timeout, hook tampering, and wall-clock
+time to resolution. It does not claim internal metrics such as reasoning quality
+or tool-use ratio, because those require instrumentation inside the agent.
+
+Each `bench run` clones the target repository into a temporary sandbox, installs
+the generated hooks there, forces the sandbox's local `core.hooksPath` to
+`.git/hooks`, injects one scenario, writes `.agent-field-kit/bench-task.md`,
+and starts the configured agent command once.
+The recommended adapter path is `{task_file}`; bench parses the command with
+`shlex.split`, replaces placeholders token by token, and runs it without a shell
+by default. Use `--shell` only for adapters that truly require shell syntax.
+
+```sh
+bin/agent-field-kit bench list
+bin/agent-field-kit bench run --scenario em-dash --repo . --agent-command 'codex exec {task_file}'
+bin/agent-field-kit bench run --all --repo . --agent-command 'claude -p {task_file}' --timeout 300
+bin/agent-field-kit bench report --results .agent-field-kit/bench-results.jsonl
+```
+
+Hooks append raw events to `.agent-field-kit/bench.log` only when
+`BENCH_SESSION` is set. The authoritative scorecard comes from the harness
+results file, `.agent-field-kit/bench-results.jsonl`, because only the harness
+can verify the real end state and confirm the hooks were not changed. A cycle
+count of `0` means the agent fixed the issue before needing hook feedback. If a
+hook failure occurs, the run must later observe a hook pass to count as a
+completed recovery.
 
 ## Tool Sources
 

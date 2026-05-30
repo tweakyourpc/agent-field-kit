@@ -2,6 +2,20 @@
 # ${marker}
 set -eu
 
+bench_emit() {
+  if [ -z "${BENCH_SESSION:-}" ]; then
+    return 0
+  fi
+  mkdir -p .agent-field-kit
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  if [ "$3" = "null" ]; then
+    directive_json=null
+  else
+    directive_json="\"$3\""
+  fi
+  printf '{"ts":"%s","session":"%s","hook":"envsentinel","result":"%s","directive":%s}\n' "$ts" "$BENCH_SESSION" "$2" "$directive_json" >> .agent-field-kit/bench.log
+}
+
 if ! command -v ${envsentinel_command} >/dev/null 2>&1; then
   echo "${envsentinel_command} not found; skipping env validation." >&2
   exit 0
@@ -12,14 +26,19 @@ if [ ! -f envsentinel.json ]; then
 fi
 
 if [ -f .env ]; then
+  directive="[AGENT_DIRECTIVE: Your commit was rejected by EnvSentinel because .env does not satisfy envsentinel.json. Fix the missing, invalid, or extra environment variables, then retry the commit.]"
   if ! ${envsentinel_command} check --schema envsentinel.json --env .env; then
-    echo "[AGENT_DIRECTIVE: Your commit was rejected by EnvSentinel because .env does not satisfy envsentinel.json. Fix the missing, invalid, or extra environment variables, then retry the commit.]" >&2
+    echo "$directive" >&2
+    bench_emit envsentinel fail "$directive"
     exit 1
   fi
 else
+  directive="[AGENT_DIRECTIVE: EnvSentinel could not generate .env.example from envsentinel.json. Inspect the schema, fix it, and retry the commit.]"
   if ! ${envsentinel_command} example --schema envsentinel.json --output .env.example --force >/dev/null; then
-    echo "[AGENT_DIRECTIVE: EnvSentinel could not generate .env.example from envsentinel.json. Inspect the schema, fix it, and retry the commit.]" >&2
+    echo "$directive" >&2
+    bench_emit envsentinel fail "$directive"
     exit 1
   fi
   git add .env.example
 fi
+bench_emit envsentinel pass null

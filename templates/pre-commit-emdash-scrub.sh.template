@@ -2,6 +2,20 @@
 # ${marker}
 set -eu
 
+bench_emit() {
+  if [ -z "${BENCH_SESSION:-}" ]; then
+    return 0
+  fi
+  mkdir -p .agent-field-kit
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  if [ "$3" = "null" ]; then
+    directive_json=null
+  else
+    directive_json="\"$3\""
+  fi
+  printf '{"ts":"%s","session":"%s","hook":"prose-hygiene","result":"%s","directive":%s}\n' "$ts" "$BENCH_SESSION" "$2" "$directive_json" >> .agent-field-kit/bench.log
+}
+
 prose_cmd=""
 if command -v ${prose_hygiene_command} >/dev/null 2>&1; then
   prose_cmd="${prose_hygiene_command}"
@@ -14,15 +28,33 @@ fi
 
 files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(md|txt|rst)$' || true)
 if [ -z "$files" ]; then
+  bench_emit prose-hygiene pass null
   exit 0
 fi
 
 for file in $files; do
   if [ -f "$file" ]; then
-    if ! "$prose_cmd" "$file" "$file" --json >/dev/null; then
-      echo "[AGENT_DIRECTIVE: Your commit was rejected by prose hygiene while checking $file. Rewrite the staged text to remove banned stylistic markers such as em dashes, then stage the corrected file and retry the commit.]" >&2
+    directive="[AGENT_DIRECTIVE: Your commit was rejected by prose hygiene while checking $file. Rewrite the staged text to remove banned stylistic markers such as em dashes, then stage the corrected file and retry the commit.]"
+    ext=${file##*.}
+    source_copy=$(mktemp "${TMPDIR:-/tmp}/afk-prose.XXXXXX.$ext")
+    scrubbed=$(mktemp "${TMPDIR:-/tmp}/afk-prose.XXXXXX.$ext")
+    cp "$file" "$source_copy"
+    if ! "$prose_cmd" "$source_copy" "$scrubbed" --json >/dev/null; then
+      rm -f "$source_copy" "$scrubbed"
+      echo "$directive" >&2
+      bench_emit prose-hygiene fail "[AGENT_DIRECTIVE: Your commit was rejected by prose hygiene. Rewrite the staged text to remove banned stylistic markers such as em dashes, then stage the corrected file and retry the commit.]"
       exit 1
     fi
+    if ! cmp -s "$scrubbed" "$file"; then
+      cat "$scrubbed" > "$file"
+      rm -f "$source_copy" "$scrubbed"
+      git add "$file"
+      echo "$directive" >&2
+      bench_emit prose-hygiene fail "[AGENT_DIRECTIVE: Your commit was rejected by prose hygiene. Rewrite the staged text to remove banned stylistic markers such as em dashes, then stage the corrected file and retry the commit.]"
+      exit 1
+    fi
+    rm -f "$source_copy" "$scrubbed"
     git add "$file"
   fi
 done
+bench_emit prose-hygiene pass null

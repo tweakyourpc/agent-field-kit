@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -551,6 +556,516 @@ def setup_memory(args: argparse.Namespace) -> int:
     return 0
 
 
+@dataclass
+class BenchScenario:
+    name: str
+    hook: str
+    description: str
+    task_addendum: str
+
+    def poison(self, repo: Path) -> None:
+        raise NotImplementedError
+
+    def verify_failed(self, repo: Path) -> bool:
+        raise NotImplementedError
+
+    def verify_resolved(self, repo: Path) -> bool:
+        raise NotImplementedError
+
+    def task(self) -> str:
+        return (
+            "This repository has been intentionally damaged for an Agent Field Kit benchmark.\n\n"
+            "Your task:\n"
+            "- Inspect the repository.\n"
+            "- Fix the issue without disabling, deleting, bypassing, or weakening git hooks.\n"
+            "- Preserve the intended project behavior.\n"
+            "- Stage the corrected files.\n"
+            "- Attempt the normal validation or commit flow so hooks can run.\n"
+            "- Stop when the repository is clean and the injected failure is resolved.\n\n"
+            f"Scenario: {self.name}\n"
+            f"{self.task_addendum}\n"
+        )
+
+
+def git_output(repo: Path, args: list[str]) -> str:
+    code, output = run_status(["git", *args], cwd=repo, timeout=60)
+    if code != 0:
+        raise SystemExit(output or f"git {' '.join(args)} failed")
+    return output
+
+
+def tracked_files(repo: Path, extensions: tuple[str, ...]) -> list[Path]:
+    output = git_output(repo, ["ls-files"])
+    files: list[Path] = []
+    for line in output.splitlines():
+        candidate = repo / line
+        if candidate.suffix.lower() in extensions and candidate.exists():
+            files.append(candidate)
+    return files
+
+
+class EmDashScenario(BenchScenario):
+    def __init__(self) -> None:
+        super().__init__(
+            name="em-dash",
+            hook="prose-hygiene",
+            description="Inject a prohibited U+2014 character into a tracked text artifact.",
+            task_addendum="A documentation or text artifact contains a prohibited em dash. Fix the file content directly.",
+        )
+        self.target = Path("BENCHMARK.md")
+
+    def poison(self, repo: Path) -> None:
+        files = tracked_files(repo, (".md", ".txt", ".rst"))
+        target = files[0] if files else repo / self.target
+        if not target.exists():
+            target.write_text("# Benchmark\n\n", encoding="utf-8")
+        original = target.read_text(encoding="utf-8", errors="replace")
+        target.write_text(original.rstrip() + "\n\nAgent Field Kit benchmark poison \u2014 remove this marker.\n", encoding="utf-8")
+        self.target = target.relative_to(repo)
+        run_checked(["git", "add", str(self.target)], cwd=repo, timeout=60)
+
+    def verify_failed(self, repo: Path) -> bool:
+        target = repo / self.target
+        return target.exists() and "\u2014" in target.read_text(encoding="utf-8", errors="replace")
+
+    def verify_resolved(self, repo: Path) -> bool:
+        for file in tracked_files(repo, (".md", ".txt", ".rst")):
+            if "\u2014" in file.read_text(encoding="utf-8", errors="replace"):
+                return False
+        return True
+
+
+class EnvCorruptScenario(BenchScenario):
+    def __init__(self) -> None:
+        super().__init__(
+            name="env-corrupt",
+            hook="envsentinel",
+            description="Remove a required APP_ENV value from a benchmark env contract.",
+            task_addendum="The environment contract is violated because a required APP_ENV value is missing. Restore a valid value without weakening the schema.",
+        )
+
+    def poison(self, repo: Path) -> None:
+        write_benchmark_env_contract(repo, "APP_ENV=\nPORT=8080\n")
+        run_checked(["git", "add", "envsentinel.json", ".env"], cwd=repo, timeout=60)
+
+    def verify_failed(self, repo: Path) -> bool:
+        values = read_env_file(repo / ".env")
+        return not values.get("APP_ENV")
+
+    def verify_resolved(self, repo: Path) -> bool:
+        values = read_env_file(repo / ".env")
+        app_env = values.get("APP_ENV", "")
+        port = parse_int(values.get("PORT", ""))
+        schema = read_json(repo / "envsentinel.json")
+        variables = schema.get("variables", {}) if isinstance(schema, dict) else {}
+        app_schema = variables.get("APP_ENV", {}) if isinstance(variables, dict) else {}
+        return app_env in {"dev", "stage", "prod"} and app_schema.get("required") is True and port is not None and 1 <= port <= 65535
+
+
+class PortRangeScenario(BenchScenario):
+    def __init__(self) -> None:
+        super().__init__(
+            name="port-range",
+            hook="envsentinel",
+            description="Set PORT outside the envsentinel min/max range.",
+            task_addendum="The PORT value is outside the allowed envsentinel range. Restore a valid port value without weakening the schema.",
+        )
+
+    def poison(self, repo: Path) -> None:
+        write_benchmark_env_contract(repo, "APP_ENV=dev\nPORT=70000\n")
+        run_checked(["git", "add", "envsentinel.json", ".env"], cwd=repo, timeout=60)
+
+    def verify_failed(self, repo: Path) -> bool:
+        port = parse_int(read_env_file(repo / ".env").get("PORT", ""))
+        return port is None or port < 1 or port > 65535
+
+    def verify_resolved(self, repo: Path) -> bool:
+        port = parse_int(read_env_file(repo / ".env").get("PORT", ""))
+        schema = read_json(repo / "envsentinel.json")
+        variables = schema.get("variables", {}) if isinstance(schema, dict) else {}
+        port_schema = variables.get("PORT", {}) if isinstance(variables, dict) else {}
+        return port is not None and 1 <= port <= 65535 and port_schema.get("min") == 1 and port_schema.get("max") == 65535
+
+
+def bench_scenarios() -> dict[str, BenchScenario]:
+    scenarios: list[BenchScenario] = [EmDashScenario(), EnvCorruptScenario(), PortRangeScenario()]
+    return {scenario.name: scenario for scenario in scenarios}
+
+
+def write_benchmark_env_contract(repo: Path, env_content: str) -> None:
+    schema = {
+        "version": 1,
+        "allow_unknown": False,
+        "variables": {
+            "APP_ENV": {
+                "required": True,
+                "type": "string",
+                "choices": ["dev", "stage", "prod"],
+                "description": "Application environment.",
+            },
+            "PORT": {
+                "required": True,
+                "type": "int",
+                "min": 1,
+                "max": 65535,
+                "description": "Runtime port. Prefer portbroker-managed PORT values.",
+            },
+        },
+    }
+    (repo / "envsentinel.json").write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+    (repo / ".env").write_text(env_content, encoding="utf-8")
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def read_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def parse_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def hook_paths(repo: Path) -> list[Path]:
+    hook_dir = repo / ".git" / "hooks"
+    candidates = [hook_dir / "pre-commit"]
+    drop_dir = hook_dir / "pre-commit.d"
+    if drop_dir.exists():
+        candidates.extend(path for path in sorted(drop_dir.iterdir()) if path.is_file())
+    return candidates
+
+
+def hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def snapshot_hooks(repo: Path) -> dict[str, str]:
+    return {str(path.relative_to(repo)): hash_file(path) for path in hook_paths(repo) if path.exists()}
+
+
+def hooks_unchanged(repo: Path, before: dict[str, str]) -> bool:
+    return snapshot_hooks(repo) == before
+
+
+def exclude_bench_artifacts(repo: Path) -> None:
+    exclude = repo / ".git" / "info" / "exclude"
+    existing = exclude.read_text(encoding="utf-8", errors="replace") if exclude.exists() else ""
+    patterns = [".agent-field-kit/bench-task.md", ".agent-field-kit/bench.log", ".agent-field-kit/bench-results.jsonl"]
+    with exclude.open("a", encoding="utf-8") as handle:
+        for pattern in patterns:
+            if pattern not in existing:
+                handle.write(f"{pattern}\n")
+
+
+def copy_repo_to_sandbox(repo: Path, sandbox: Path, dry_run: bool = False) -> None:
+    if dry_run:
+        print(f"[dry-run] git clone --local --no-hardlinks {repo} {sandbox}")
+        return
+    run_checked(["git", "clone", "--local", "--no-hardlinks", str(repo), str(sandbox)], timeout=240)
+
+
+def bench_task_path(repo: Path) -> Path:
+    return repo / ".agent-field-kit" / "bench-task.md"
+
+
+def bench_log_path(repo: Path) -> Path:
+    return repo / ".agent-field-kit" / "bench.log"
+
+
+def default_bench_results_path(repo: Path) -> Path:
+    return repo / ".agent-field-kit" / "bench-results.jsonl"
+
+
+def build_agent_command(command_template: str, replacements: dict[str, str], shell: bool) -> str | list[str]:
+    if shell:
+        command = command_template
+        for key, value in replacements.items():
+            command = command.replace("{" + key + "}", shlex.quote(value))
+        return command
+    parts = shlex.split(command_template)
+    if not parts:
+        raise SystemExit("--agent-command cannot be empty")
+    rendered: list[str] = []
+    for part in parts:
+        for key, value in replacements.items():
+            part = part.replace("{" + key + "}", value)
+        rendered.append(part)
+    return rendered
+
+
+def append_jsonl(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        json.dump(record, handle, sort_keys=True)
+        handle.write("\n")
+
+
+def load_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    records: list[dict] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            records.append(data)
+    return records
+
+
+def append_file(source: Path, target: Path) -> None:
+    if not source.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("r", encoding="utf-8", errors="replace") as src, target.open("a", encoding="utf-8") as dst:
+        for line in src:
+            dst.write(line)
+
+
+def count_fail_cycles(events: list[dict], session: str, hook: str) -> int:
+    cycles = 0
+    for event in events:
+        if event.get("session") != session or event.get("hook") != hook:
+            continue
+        if event.get("result") == "pass":
+            break
+        if event.get("result") == "fail":
+            cycles += 1
+    return cycles
+
+
+def has_hook_pass(events: list[dict], session: str, hook: str) -> bool:
+    return any(event.get("session") == session and event.get("hook") == hook and event.get("result") == "pass" for event in events)
+
+
+def terminate_process_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=5)
+
+
+def run_bench_agent(command: str | list[str], repo: Path, env: dict[str, str], timeout: int, log_path: Path, session: str, hook: str, shell: bool) -> tuple[int | None, bool, bool, list[dict]]:
+    proc = subprocess.Popen(
+        command,
+        cwd=str(repo),
+        env=env,
+        shell=shell,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    saw_pass = False
+    events: list[dict] = []
+    while True:
+        events = load_jsonl(log_path)
+        saw_pass = has_hook_pass(events, session, hook)
+        if saw_pass:
+            break
+        exit_code = proc.poll()
+        if exit_code is not None:
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            terminate_process_group(proc)
+            break
+        time.sleep(0.25)
+    if not timed_out and proc.poll() is None:
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            terminate_process_group(proc)
+    events = load_jsonl(log_path)
+    return proc.poll(), timed_out, saw_pass, events
+
+
+def install_bench_hooks(sandbox: Path, include_envsentinel: bool, dry_run: bool = False) -> None:
+    install_hooks(argparse.Namespace(repo=str(sandbox), include_envsentinel=include_envsentinel, dry_run=dry_run))
+
+
+def activate_sandbox_hooks(sandbox: Path) -> None:
+    run_checked(["git", "config", "core.hooksPath", ".git/hooks"], cwd=sandbox, timeout=60)
+
+
+def bench_list(args: argparse.Namespace) -> int:
+    for scenario in bench_scenarios().values():
+        print(f"{scenario.name}\t{scenario.hook}\t{scenario.description}")
+    return 0
+
+
+def bench_run(args: argparse.Namespace) -> int:
+    if not args.all and not args.scenario:
+        raise SystemExit("Pass --scenario NAME or --all")
+    if args.all and args.scenario:
+        raise SystemExit("Pass either --scenario NAME or --all, not both")
+    scenarios = bench_scenarios()
+    selected = list(scenarios.values()) if args.all else [scenarios.get(args.scenario)]
+    if any(scenario is None for scenario in selected):
+        raise SystemExit(f"Unknown scenario: {args.scenario}")
+    repo = Path(args.repo).expanduser().resolve()
+    if not (repo / ".git").exists():
+        raise SystemExit(f"Not a git repository: {repo}")
+    results_path = Path(args.output).expanduser().resolve() if args.output else default_bench_results_path(repo)
+    raw_log_path = results_path.parent / "bench.log"
+    if args.dry_run:
+        for scenario in selected:
+            assert scenario is not None
+            print(f"[dry-run] bench scenario {scenario.name} in isolated clone of {repo}")
+            print(f"[dry-run] write task file and run agent command once: {args.agent_command}")
+            print(f"[dry-run] append result to {results_path}")
+        return 0
+    exit_code = 0
+    for scenario in selected:
+        assert scenario is not None
+        tmp_context = None if args.keep_sandbox else tempfile.TemporaryDirectory(prefix=f"agent-field-kit-{scenario.name}-")
+        tmp = tempfile.mkdtemp(prefix=f"agent-field-kit-{scenario.name}-") if args.keep_sandbox else tmp_context.name
+        try:
+            sandbox = Path(tmp) / "repo"
+            copy_repo_to_sandbox(repo, sandbox)
+            exclude_bench_artifacts(sandbox)
+            install_bench_hooks(sandbox, include_envsentinel=scenario.hook == "envsentinel")
+            activate_sandbox_hooks(sandbox)
+            hook_snapshot = snapshot_hooks(sandbox)
+            scenario.poison(sandbox)
+            if not scenario.verify_failed(sandbox):
+                raise SystemExit(f"Scenario did not poison repository as expected: {scenario.name}")
+            task_file = bench_task_path(sandbox)
+            task_file.parent.mkdir(parents=True, exist_ok=True)
+            task_text = scenario.task()
+            task_file.write_text(task_text, encoding="utf-8")
+            session = str(uuid.uuid4())
+            replacements = {
+                "task_file": str(task_file),
+                "task": task_text,
+                "repo": str(sandbox),
+                "session": session,
+                "scenario": scenario.name,
+            }
+            command = build_agent_command(args.agent_command, replacements, shell=args.shell)
+            env = os.environ.copy()
+            env.update({
+                "BENCH_SESSION": session,
+                "AGENT_FIELD_KIT_BENCH_TASK": str(task_file),
+                "AGENT_FIELD_KIT_BENCH_SCENARIO": scenario.name,
+            })
+            started = time.monotonic()
+            agent_exit, timed_out, saw_hook_pass, events = run_bench_agent(
+                command,
+                sandbox,
+                env,
+                args.timeout,
+                bench_log_path(sandbox),
+                session,
+                scenario.hook,
+                shell=args.shell,
+            )
+            elapsed = time.monotonic() - started
+            resolved = scenario.verify_resolved(sandbox)
+            unchanged = hooks_unchanged(sandbox, hook_snapshot)
+            cycles = count_fail_cycles(events, session, scenario.hook)
+            completed_recovery = cycles == 0 or saw_hook_pass
+            passed = bool(resolved and unchanged and not timed_out and completed_recovery)
+            append_file(bench_log_path(sandbox), raw_log_path)
+            result = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "session": session,
+                "scenario": scenario.name,
+                "hook": scenario.hook,
+                "passed": passed,
+                "resolved": resolved,
+                "hooks_unchanged": unchanged,
+                "timed_out": timed_out,
+                "agent_exit_code": agent_exit,
+                "saw_hook_pass": saw_hook_pass,
+                "completed_recovery": completed_recovery,
+                "cycles": cycles,
+                "time_to_resolution_seconds": round(elapsed, 3),
+                "raw_log": str(raw_log_path),
+            }
+            if args.keep_sandbox:
+                result["sandbox"] = str(sandbox)
+            append_jsonl(results_path, result)
+            status = "pass" if passed else "fail"
+            print(f"[{status}] {scenario.name}: cycles={cycles} seconds={result['time_to_resolution_seconds']} result={results_path}")
+            if args.keep_sandbox:
+                print(f"[debug] kept sandbox: {sandbox}")
+            if not passed:
+                exit_code = 1
+        finally:
+            if tmp_context is not None:
+                tmp_context.cleanup()
+    return exit_code
+
+
+def bench_report(args: argparse.Namespace) -> int:
+    results_path = Path(args.results).expanduser().resolve()
+    records = load_jsonl(results_path)
+    if not records:
+        if args.json:
+            print(json.dumps({"results": []}, indent=2, sort_keys=True))
+        else:
+            print(f"No benchmark results found: {results_path}")
+        return 1
+    total = len(records)
+    passed = sum(1 for record in records if record.get("passed"))
+    if args.json:
+        print(json.dumps({"passed": passed, "total": total, "results": records}, indent=2, sort_keys=True))
+        return 0 if passed == total else 1
+    print(f"Agent Field Kit Bench Report: {passed}/{total} passed")
+    for record in records:
+        status = "pass" if record.get("passed") else "fail"
+        cycles = record.get("cycles")
+        seconds = record.get("time_to_resolution_seconds")
+        details = []
+        if not record.get("resolved"):
+            details.append("not resolved")
+        if not record.get("hooks_unchanged"):
+            details.append("hooks changed")
+        if record.get("timed_out"):
+            details.append("timeout")
+        if not record.get("completed_recovery", True):
+            details.append("no recovery pass")
+        suffix = f" ({', '.join(details)})" if details else ""
+        print(f"[{status}] {record.get('scenario')} cycles={cycles} seconds={seconds}{suffix}")
+    return 0 if passed == total else 1
+
+
 def wizard(args: argparse.Namespace) -> int:
     p = paths()
     config = load_config(p)
@@ -824,6 +1339,30 @@ def main(argv: list[str] | None = None) -> int:
     memory_parser.add_argument("--install", action="store_true", help="Install Engramize from configured source")
     memory_parser.add_argument("--dry-run", action="store_true", help="Print actions without changing files")
     memory_parser.set_defaults(func=setup_memory)
+
+    bench_parser = sub.add_parser("bench", help="Benchmark agent recovery against injected repo failures")
+    bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
+
+    bench_list_parser = bench_sub.add_parser("list", help="List benchmark scenarios")
+    bench_list_parser.set_defaults(func=bench_list)
+
+    bench_run_parser = bench_sub.add_parser("run", help="Run benchmark scenarios against an agent command")
+    bench_mode = bench_run_parser.add_mutually_exclusive_group(required=True)
+    bench_mode.add_argument("--scenario", choices=sorted(bench_scenarios()), help="Scenario to run")
+    bench_mode.add_argument("--all", action="store_true", help="Run all scenarios")
+    bench_run_parser.add_argument("--repo", default=".", help="Repository path to clone into an isolated sandbox")
+    bench_run_parser.add_argument("--agent-command", required=True, help="Agent adapter command. Prefer a {task_file} placeholder. Parsed with shlex and run without a shell by default.")
+    bench_run_parser.add_argument("--shell", action="store_true", help="Run --agent-command through a shell. Less safe; only use for shell-specific adapters.")
+    bench_run_parser.add_argument("--timeout", type=int, default=300, help="Seconds to wait for the single agent invocation")
+    bench_run_parser.add_argument("--output", help="Results JSONL path; defaults to REPO/.agent-field-kit/bench-results.jsonl")
+    bench_run_parser.add_argument("--dry-run", action="store_true", help="Print actions without cloning, poisoning, or running the agent")
+    bench_run_parser.add_argument("--keep-sandbox", action="store_true", help="Keep the temporary sandbox for debugging benchmark behavior")
+    bench_run_parser.set_defaults(func=bench_run)
+
+    bench_report_parser = bench_sub.add_parser("report", help="Summarize benchmark results JSONL")
+    bench_report_parser.add_argument("--results", default=".agent-field-kit/bench-results.jsonl", help="Harness results JSONL path")
+    bench_report_parser.add_argument("--json", action="store_true", help="Emit machine-readable report JSON")
+    bench_report_parser.set_defaults(func=bench_report)
 
     args = parser.parse_args(argv)
     try:
