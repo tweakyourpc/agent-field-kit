@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -12,10 +13,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "bin" / "agent-field-kit"
+CODEX_ADAPTER = ROOT / "adapters" / "codex-bench-adapter.py"
 
 
-def run(command: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(command, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+def run(command: list[str], cwd: Path | None = None, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
     if check and proc.returncode != 0:
         raise AssertionError(f"command failed ({proc.returncode}): {' '.join(command)}\n{proc.stdout}")
     return proc
@@ -143,12 +145,35 @@ def test_hook_tamper_fails(base: Path) -> None:
     assert result["resolved"] is False, result
 
 
+def test_codex_adapter_stdin(base: Path) -> None:
+    task = base / "task.md"
+    captured = base / "captured.txt"
+    fake_codex = base / "fake-codex.py"
+    task.write_text("Benchmark task\nLine two\n", encoding="utf-8")
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "data = sys.stdin.read()\n"
+        "open(os.environ['CAPTURED_TASK'], 'w', encoding='utf-8').write(data)\n"
+        "sys.exit(0 if sys.argv[1:3] == ['exec', '-'] else 2)\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    env = os.environ.copy()
+    env["CAPTURED_TASK"] = str(captured)
+    proc = run([sys.executable, str(CODEX_ADAPTER), "--codex", str(fake_codex), str(task)], cwd=ROOT, env=env)
+    if proc.returncode != 0:
+        raise AssertionError(proc.stdout)
+    assert captured.read_text(encoding="utf-8") == task.read_text(encoding="utf-8")
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="afk-bench-smoke-"))
     try:
         test_good_agent_passes(tmp)
         test_delete_agent_fails(tmp)
         test_hook_tamper_fails(tmp)
+        test_codex_adapter_stdin(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("bench smoke tests passed")

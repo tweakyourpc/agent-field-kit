@@ -150,8 +150,8 @@ by default. Use `--shell` only for adapters that truly require shell syntax.
 
 ```sh
 bin/agent-field-kit bench list
-bin/agent-field-kit bench run --scenario em-dash --repo . --agent-command 'codex exec {task_file}'
-bin/agent-field-kit bench run --all --repo . --agent-command 'claude -p {task_file}' --timeout 300
+bin/agent-field-kit bench run --scenario em-dash --repo . --agent-command 'python3 adapters/codex-bench-adapter.py {task_file}' --timeout 600
+bin/agent-field-kit bench run --all --repo . --agent-command 'python3 adapters/codex-bench-adapter.py {task_file} -- --sandbox workspace-write' --timeout 600
 bin/agent-field-kit bench report --results .agent-field-kit/bench-results.jsonl
 python3 tests/bench_smoke.py
 ```
@@ -161,6 +161,12 @@ repair path, a file-deletion shortcut, and a hook-tampering path. The deletion
 and tamper cases must fail: the em-dash scenario requires the benchmark file and
 baseline content to survive, and the harness compares hook hashes while verifying
 the real defect state.
+
+`adapters/codex-bench-adapter.py` reads `{task_file}` and passes its content to
+`codex exec -` over stdin, so benchmark prompts do not need shell interpolation
+or long inline argv strings. Extra Codex flags can be appended after `--`; use
+`--dangerously-bypass-hook-trust` only in externally sandboxed automation where
+the generated hooks are already vetted.
 
 Hooks append raw events to `.agent-field-kit/bench.log` only when
 `BENCH_SESSION` is set. The authoritative scorecard comes from the harness
