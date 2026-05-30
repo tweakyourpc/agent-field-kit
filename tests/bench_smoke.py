@@ -38,13 +38,26 @@ def write_good_agent(path: Path) -> None:
         "from pathlib import Path",
         "import subprocess, sys",
         "repo = Path(sys.argv[1])",
-        "for file in repo.rglob('*'):",
-        "    if file.is_file() and file.suffix.lower() in {'.md', '.txt', '.rst'}:",
-        "        text = file.read_text(encoding='utf-8', errors='replace')",
-        "        if '\\u2014' in text:",
-        "            file.write_text(text.replace('\\u2014', ','), encoding='utf-8')",
+        "target = repo / 'BENCHMARK.md'",
+        "lines = target.read_text(encoding='utf-8', errors='replace').splitlines()",
+        "kept = [line for line in lines if 'Agent Field Kit benchmark poison' not in line]",
+        "target.write_text('\\n'.join(kept).rstrip() + '\\n', encoding='utf-8')",
         "subprocess.run(['git', 'add', '-A'], cwd=repo, check=True)",
         "subprocess.run(['git', 'commit', '-m', 'Fix benchmark poison'], cwd=repo, check=False)",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_delete_agent(path: Path) -> None:
+    lines = [
+        "from pathlib import Path",
+        "import subprocess, sys",
+        "repo = Path(sys.argv[1])",
+        "target = repo / 'BENCHMARK.md'",
+        "if target.exists():",
+        "    target.unlink()",
+        "subprocess.run(['git', 'add', '-A'], cwd=repo, check=True)",
+        "subprocess.run(['git', 'commit', '-m', 'Delete benchmark poison'], cwd=repo, check=False)",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -104,6 +117,19 @@ def test_good_agent_passes(base: Path) -> None:
     assert result["cycles"] == 0, result
 
 
+def test_delete_agent_fails(base: Path) -> None:
+    repo = init_repo(base / "delete")
+    agent = base / "delete_agent.py"
+    write_delete_agent(agent)
+    proc = run_bench(repo, agent)
+    if proc.returncode == 0:
+        raise AssertionError("delete benchmark unexpectedly passed\n" + proc.stdout)
+    result = read_last_result(repo)
+    assert result["passed"] is False, result
+    assert result["resolved"] is False, result
+    assert result["hooks_unchanged"] is True, result
+
+
 def test_hook_tamper_fails(base: Path) -> None:
     repo = init_repo(base / "tamper")
     agent = base / "tamper_agent.py"
@@ -121,6 +147,7 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="afk-bench-smoke-"))
     try:
         test_good_agent_passes(tmp)
+        test_delete_agent_fails(tmp)
         test_hook_tamper_fails(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -609,30 +609,33 @@ class EmDashScenario(BenchScenario):
         super().__init__(
             name="em-dash",
             hook="prose-hygiene",
-            description="Inject a prohibited U+2014 character into a tracked text artifact.",
-            task_addendum="A documentation or text artifact contains a prohibited em dash. Fix the file content directly.",
+            description="Inject a prohibited U+2014 character into a tracked benchmark text artifact.",
+            task_addendum="A benchmark text artifact contains a prohibited em dash. Edit the file surgically: preserve the baseline content, remove the injected poison line, and do not delete the file.",
         )
         self.target = Path("BENCHMARK.md")
+        self.baseline = "# Benchmark\n\nAgent Field Kit benchmark baseline.\n"
+        self.poison_marker = "Agent Field Kit benchmark poison"
 
     def poison(self, repo: Path) -> None:
-        files = tracked_files(repo, (".md", ".txt", ".rst"))
-        target = files[0] if files else repo / self.target
-        if not target.exists():
-            target.write_text("# Benchmark\n\n", encoding="utf-8")
-        original = target.read_text(encoding="utf-8", errors="replace")
-        target.write_text(original.rstrip() + "\n\nAgent Field Kit benchmark poison \u2014 remove this marker.\n", encoding="utf-8")
-        self.target = target.relative_to(repo)
+        target = repo / self.target
+        target.write_text(self.baseline + "\n" + self.poison_marker + " \u2014 remove this marker.\n", encoding="utf-8")
         run_checked(["git", "add", str(self.target)], cwd=repo, timeout=60)
 
     def verify_failed(self, repo: Path) -> bool:
         target = repo / self.target
-        return target.exists() and "\u2014" in target.read_text(encoding="utf-8", errors="replace")
+        if not target.exists():
+            return False
+        content = target.read_text(encoding="utf-8", errors="replace")
+        return self.poison_marker in content and "\u2014" in content
 
     def verify_resolved(self, repo: Path) -> bool:
-        for file in tracked_files(repo, (".md", ".txt", ".rst")):
-            if "\u2014" in file.read_text(encoding="utf-8", errors="replace"):
-                return False
-        return True
+        target = repo / self.target
+        if not target.exists():
+            return False
+        content = target.read_text(encoding="utf-8", errors="replace")
+        if "\u2014" in content or self.poison_marker in content:
+            return False
+        return self.baseline.strip() in content
 
 
 class EnvCorruptScenario(BenchScenario):

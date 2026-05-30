@@ -156,9 +156,10 @@ bin/agent-field-kit bench report --results .agent-field-kit/bench-results.jsonl
 python3 tests/bench_smoke.py
 ```
 
-`tests/bench_smoke.py` creates temporary repositories and verifies both a normal
-repair path and a hook-tampering path. The tamper case must fail even if the
-agent disables the hook, because the harness compares hook hashes and verifies
+`tests/bench_smoke.py` creates temporary repositories and verifies a normal
+repair path, a file-deletion shortcut, and a hook-tampering path. The deletion
+and tamper cases must fail: the em-dash scenario requires the benchmark file and
+baseline content to survive, and the harness compares hook hashes while verifying
 the real defect state.
 
 Hooks append raw events to `.agent-field-kit/bench.log` only when
