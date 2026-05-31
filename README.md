@@ -180,10 +180,10 @@ completed recovery.
 
 Defaults are intentionally configurable in the wizard:
 
-- `portbroker`: `https://github.com/tweakyourpc/portbroker.git`
-- `prose-hygiene`: `https://github.com/tweakyourpc/prose-hygiene.git`
-- `envsentinel`: `https://github.com/tweakyourpc/envsentinel.git`
-- `engramize`: `https://github.com/tweakyourpc/engramize.git`
+- `portbroker`: `https://github.com/yourusername/portbroker.git`
+- `prose-hygiene`: `https://github.com/yourusername/prose-hygiene.git`
+- `envsentinel`: `https://github.com/yourusername/envsentinel.git`
+- `engramize`: `https://github.com/yourusername/engramize.git`
 
 If a matching local source path exists, Agent Field Kit uses that instead of
 cloning. The default fallback repositories are public, but they are still

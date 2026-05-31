@@ -35,17 +35,17 @@ DEFAULT_CONFIG = {
     "install_bin_dir": str(Path.home() / "bin"),
     "tool_source_dir": str(Path.home() / ".local" / "src" / APP_NAME),
     "portbroker_command": "portbroker",
-    "portbroker_local_source": str(Path.home() / "Projects" / "portbroker"),
-    "portbroker_repo": "https://github.com/tweakyourpc/portbroker.git",
+    "portbroker_local_source": str(Path.home() / "path" / "to" / "portbroker"),
+    "portbroker_repo": "https://github.com/yourusername/portbroker.git",
     "prose_hygiene_command": "prose-hygiene",
     "prose_hygiene_compat_command": "emdash-scrub",
     "prose_hygiene_local_source": str(AGENT_HOME / "prose-hygiene"),
-    "prose_hygiene_repo": "https://github.com/tweakyourpc/prose-hygiene.git",
+    "prose_hygiene_repo": "https://github.com/yourusername/prose-hygiene.git",
     "envsentinel_command": "envsentinel",
     "envsentinel_local_source": str(AGENT_HOME / "envsentinel"),
-    "envsentinel_repo": "https://github.com/tweakyourpc/envsentinel.git",
-    "engramize_local_source": str(Path.home() / "RAG" / "workspace" / "engramize"),
-    "engramize_repo": "https://github.com/tweakyourpc/engramize.git",
+    "envsentinel_repo": "https://github.com/yourusername/envsentinel.git",
+    "engramize_local_source": str(Path.home() / "path" / "to" / "engramize"),
+    "engramize_repo": "https://github.com/yourusername/engramize.git",
     "memory_protocol_dir": ".agent-field-kit",
     "github_command": "gh",
     "clasp_command": "clasp",
@@ -77,9 +77,14 @@ def paths() -> Paths:
     return Paths(root=root, config_dir=config_dir, config_file=config_dir / "config.json")
 
 
-def prompt(label: str, default: str) -> str:
-    answer = input(f"{label} [{default}]: ").strip()
-    return answer or default
+def prompt(label: str, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default else ""
+    answer = input(f"{label}{suffix}: ").strip()
+    if answer:
+        return answer
+    if default is not None:
+        return default
+    raise SystemExit(f"{label} is required.")
 
 
 def prompt_bool(label: str, default: bool) -> bool:
@@ -1098,17 +1103,17 @@ def wizard(args: argparse.Namespace) -> int:
     config["install_bin_dir"] = prompt("User binary install directory", str(config["install_bin_dir"]))
     config["tool_source_dir"] = prompt("Downloaded tool source directory", str(config["tool_source_dir"]))
     config["portbroker_command"] = prompt("Portbroker command", str(config["portbroker_command"]))
-    config["portbroker_local_source"] = prompt("Local portbroker source", str(config["portbroker_local_source"]))
-    config["portbroker_repo"] = prompt("Portbroker Git repo", str(config["portbroker_repo"]))
+    config["portbroker_local_source"] = prompt("Local portbroker source", None)
+    config["portbroker_repo"] = prompt("Portbroker Git repo", None)
     config["prose_hygiene_command"] = prompt("Prose hygiene command", str(config["prose_hygiene_command"]))
     config["prose_hygiene_compat_command"] = prompt("Legacy em dash scrub command", str(config["prose_hygiene_compat_command"]))
-    config["prose_hygiene_local_source"] = prompt("Local prose-hygiene source", str(config["prose_hygiene_local_source"]))
-    config["prose_hygiene_repo"] = prompt("Prose-hygiene Git repo", str(config["prose_hygiene_repo"]))
+    config["prose_hygiene_local_source"] = prompt("Local prose-hygiene source", None)
+    config["prose_hygiene_repo"] = prompt("Prose-hygiene Git repo", None)
     config["envsentinel_command"] = prompt("EnvSentinel command", str(config["envsentinel_command"]))
-    config["envsentinel_local_source"] = prompt("Local EnvSentinel source", str(config["envsentinel_local_source"]))
-    config["envsentinel_repo"] = prompt("EnvSentinel Git repo", str(config["envsentinel_repo"]))
-    config["engramize_local_source"] = prompt("Local Engramize source", str(config["engramize_local_source"]))
-    config["engramize_repo"] = prompt("Engramize Git repo", str(config["engramize_repo"]))
+    config["envsentinel_local_source"] = prompt("Local EnvSentinel source", None)
+    config["envsentinel_repo"] = prompt("EnvSentinel Git repo", None)
+    config["engramize_local_source"] = prompt("Local Engramize source", None)
+    config["engramize_repo"] = prompt("Engramize Git repo", None)
     config["memory_protocol_dir"] = prompt("Memory protocol directory", str(config["memory_protocol_dir"]))
     config["github_command"] = prompt("GitHub CLI command", str(config["github_command"]))
     config["clasp_command"] = prompt("Google clasp command", str(config["clasp_command"]))
